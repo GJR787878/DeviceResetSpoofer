@@ -13,6 +13,7 @@
 
         <!-- 说明卡片 -->
         <TextView
+            android:id="@+id/tv_scope_title"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="ℹ️ 生效范围"
@@ -22,9 +23,9 @@
             android:layout_marginBottom="8dp"/>
 
         <TextView
+            android:id="@+id/tv_scope_content"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="本模块直接对 LSPosed 作用域中勾选的应用生效，无需在此再次选择。&#10;&#10;在 LSPosed 管理器中勾选目标应用 → 重启手机 → 清除目标应用数据 → 重新打开即获得新身份。"
             android:textSize="13sp"
             android:textColor="#CCCCDD"
             android:lineSpacingExtra="3dp"
@@ -35,6 +36,7 @@
 
         <!-- 伪装开关标题 -->
         <TextView
+            android:id="@+id/tv_spoof_title"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="🎭 伪装选项"
@@ -54,6 +56,7 @@
             android:alpha="0.9"
             android:layout_marginBottom="8dp">
             <TextView
+                android:id="@+id/tv_android_id"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
@@ -77,6 +80,7 @@
             android:alpha="0.9"
             android:layout_marginBottom="8dp">
             <TextView
+                android:id="@+id/tv_ad_id"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
@@ -100,6 +104,7 @@
             android:alpha="0.9"
             android:layout_marginBottom="8dp">
             <TextView
+                android:id="@+id/tv_imei"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
@@ -123,6 +128,7 @@
             android:alpha="0.9"
             android:layout_marginBottom="8dp">
             <TextView
+                android:id="@+id/tv_build"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
@@ -146,6 +152,7 @@
             android:alpha="0.9"
             android:layout_marginBottom="8dp">
             <TextView
+                android:id="@+id/tv_mac"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
@@ -169,6 +176,7 @@
             android:alpha="0.9"
             android:layout_marginBottom="8dp">
             <TextView
+                android:id="@+id/tv_gsf"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
@@ -192,6 +200,7 @@
             android:alpha="0.9"
             android:layout_marginBottom="20dp">
             <TextView
+                android:id="@+id/tv_carrier"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
@@ -206,9 +215,9 @@
 
         <!-- 底部提示 -->
         <TextView
+            android:id="@+id/tv_footer"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="右上角菜单可手动重置身份。&#10;排查问题：LSPosed → 日志 → 搜索「DeviceReset」"
             android:textSize="12sp"
             android:textColor="#8888AA"
             android:gravity="center"
