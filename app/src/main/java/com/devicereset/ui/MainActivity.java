@@ -185,7 +185,8 @@ public class MainActivity extends AppCompatActivity {
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
         menu.add(0, 1, 0, "手动重置身份");
-        menu.add(0, 2, 1, "关于");
+        menu.add(0, 3, 1, "使用说明");
+        menu.add(0, 2, 2, "关于");
         return true;
     }
 
@@ -193,6 +194,9 @@ public class MainActivity extends AppCompatActivity {
     public boolean onOptionsItemSelected(MenuItem item) {
         if (item.getItemId() == 1) {
             showResetDialog();
+            return true;
+        } else if (item.getItemId() == 3) {
+            startActivity(new android.content.Intent(this, HelpActivity.class));
             return true;
         } else if (item.getItemId() == 2) {
             showAboutDialog();
