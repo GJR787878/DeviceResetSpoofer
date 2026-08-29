@@ -20,10 +20,7 @@
         <meta-data
             android:name="xposedminversion"
             android:value="82" />
-        <!-- LSPosed作用域说明（LSPosed会读取这个，也可以在管理器中手动设置） -->
-        <meta-data
-            android:name="xposedscope"
-            android:resource="@array/xposed_scope" />
+
 
         <activity
             android:name=".ui.MainActivity"
