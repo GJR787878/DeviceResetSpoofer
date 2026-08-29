@@ -251,7 +251,7 @@ public class GsfIdHook {
         public android.os.Bundle respond(android.os.Bundle extras) { return original.respond(extras); }
 
         @Override
-        public void copyStringToBuffer(int columnIndex, android.text.CharArrayBuffer buffer) {
+        public void copyStringToBuffer(int columnIndex, CharArrayBuffer buffer) {
             original.copyStringToBuffer(columnIndex, buffer);
         }
     }
