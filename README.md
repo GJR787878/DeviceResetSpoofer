@@ -11,9 +11,11 @@
 
 ---
 
-## 📱 界面预览 / Screenshot
+## 📱 界面预览 / Screenshots
 
-![主界面](images/screenshot_main_en.png)
+| 主界面 / Main | 配置界面 / Config |
+|:---:|:---:|
+| ![主界面](images/screenshot_main_en.png) | ![配置界面](images/screenshot_config_en.png) |
 
 ---
 
