@@ -1,6 +1,5 @@
 package com.devicereset.xposed;
 
-import android.app.ActivityThread;
 import android.content.pm.ApplicationInfo;
 
 import com.devicereset.hooks.AdvertisingIdHook;
@@ -129,13 +128,14 @@ public class MainHook implements IXposedHookLoadPackage {
 
     /**
      * 获取当前进程的filesDir路径。
-     * 优先通过ActivityThread.currentActivityThread().mBoundApplication.appInfo.dataDir获取，
+     * 优先通过反射ActivityThread.currentActivityThread().mBoundApplication.appInfo.dataDir获取，
      * fallback到包名构建路径。
      */
     private String getDataDir(String packageName) {
         try {
-            // 方式1：通过ActivityThread获取
-            ActivityThread activityThread = ActivityThread.currentActivityThread();
+            // 方式1：通过反射ActivityThread获取
+            Class<?> activityThreadClass = XposedHelpers.findClass("android.app.ActivityThread", null);
+            Object activityThread = XposedHelpers.callStaticMethod(activityThreadClass, "currentActivityThread");
             if (activityThread != null) {
                 Object boundData = XposedHelpers.getObjectField(activityThread, "mBoundApplication");
                 if (boundData != null) {
@@ -150,10 +150,14 @@ public class MainHook implements IXposedHookLoadPackage {
         }
 
         try {
-            // 方式2：通过当前Application获取
-            android.app.Application app = ActivityThread.currentApplication();
+            // 方式2：通过反射获取当前Application
+            Class<?> activityThreadClass = XposedHelpers.findClass("android.app.ActivityThread", null);
+            Object app = XposedHelpers.callStaticMethod(activityThreadClass, "currentApplication");
             if (app != null) {
-                return app.getFilesDir().getAbsolutePath();
+                java.io.File filesDir = (java.io.File) XposedHelpers.callMethod(app, "getFilesDir");
+                if (filesDir != null) {
+                    return filesDir.getAbsolutePath();
+                }
             }
         } catch (Throwable t) {
             XposedBridge.log("[DeviceReset] get dataDir via Application failed: " + t.getMessage());
