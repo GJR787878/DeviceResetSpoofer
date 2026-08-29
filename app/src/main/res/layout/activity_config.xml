@@ -131,43 +131,43 @@
         <!-- Android ID开关 -->
         <LinearLayout style="@style/SettingRow">
             <TextView style="@style/SettingText" android:text="伪装 Android ID"/>
-            <androidx.appcompat.widget.SwitchCompat android:id="@+id/switch_hook_android_id"/>
+            <androidx.appcompat.widget.SwitchCompat android:id="@+id/switch_hook_android_id" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
         </LinearLayout>
 
         <!-- 广告ID开关 -->
         <LinearLayout style="@style/SettingRow">
             <TextView style="@style/SettingText" android:text="伪装 广告ID (AAID)"/>
-            <androidx.appcompat.widget.SwitchCompat android:id="@+id/switch_hook_ad_id"/>
+            <androidx.appcompat.widget.SwitchCompat android:id="@+id/switch_hook_ad_id" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
         </LinearLayout>
 
         <!-- IMEI开关 -->
         <LinearLayout style="@style/SettingRow">
             <TextView style="@style/SettingText" android:text="伪装 IMEI/MEID"/>
-            <androidx.appcompat.widget.SwitchCompat android:id="@+id/switch_hook_imei"/>
+            <androidx.appcompat.widget.SwitchCompat android:id="@+id/switch_hook_imei" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
         </LinearLayout>
 
         <!-- Build信息开关 -->
         <LinearLayout style="@style/SettingRow">
             <TextView style="@style/SettingText" android:text="伪装 设备型号 (Build)"/>
-            <androidx.appcompat.widget.SwitchCompat android:id="@+id/switch_hook_build"/>
+            <androidx.appcompat.widget.SwitchCompat android:id="@+id/switch_hook_build" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
         </LinearLayout>
 
         <!-- MAC开关 -->
         <LinearLayout style="@style/SettingRow">
             <TextView style="@style/SettingText" android:text="伪装 MAC地址"/>
-            <androidx.appcompat.widget.SwitchCompat android:id="@+id/switch_hook_mac"/>
+            <androidx.appcompat.widget.SwitchCompat android:id="@+id/switch_hook_mac" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
         </LinearLayout>
 
         <!-- GSF开关 -->
         <LinearLayout style="@style/SettingRow">
             <TextView style="@style/SettingText" android:text="伪装 GSF ID"/>
-            <androidx.appcompat.widget.SwitchCompat android:id="@+id/switch_hook_gsf"/>
+            <androidx.appcompat.widget.SwitchCompat android:id="@+id/switch_hook_gsf" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
         </LinearLayout>
 
         <!-- 运营商开关 -->
         <LinearLayout style="@style/SettingRow">
             <TextView style="@style/SettingText" android:text="伪装 运营商信息"/>
-            <androidx.appcompat.widget.SwitchCompat android:id="@+id/switch_hook_carrier"/>
+            <androidx.appcompat.widget.SwitchCompat android:id="@+id/switch_hook_carrier" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
         </LinearLayout>
 
         <!-- 使用说明（直接显示） -->
