@@ -24,19 +24,23 @@ public class SentinelDetector {
     private static boolean checked = false;
 
     /**
-     * 检查哨兵文件，返回本次启动应使用的身份。
-     * 只在第一次调用时执行检测，后续调用直接返回缓存。
+     * 检查哨兵文件，返回本次启动应使用的身份（需要Context）。
      */
     public static Identity checkAndGetIdentity(Context context) {
+        return checkAndGetIdentityByDir(context.getFilesDir().getAbsolutePath());
+    }
+
+    /**
+     * 直接用filesDir路径检测哨兵（不需要Context，用于更早的Hook点）。
+     */
+    public static Identity checkAndGetIdentityByDir(String filesDirPath) {
         if (checked && cachedIdentity != null) {
             return cachedIdentity;
         }
-
         try {
-            File sentinel = new File(context.getFilesDir(), SENTINEL_FILE);
-
+            File filesDir = new File(filesDirPath);
+            File sentinel = new File(filesDir, SENTINEL_FILE);
             if (sentinel.exists()) {
-                // 哨兵还在 → 数据没被清 → 读取旧身份
                 byte[] data = Files.readAllBytes(sentinel.toPath());
                 String json = new String(data, StandardCharsets.UTF_8);
                 Identity id = Identity.fromJson(json);
@@ -45,27 +49,17 @@ public class SentinelDetector {
                     checked = true;
                     return id;
                 }
-                // 读取失败或数据损坏，当作数据被清处理
             }
-
-            // 哨兵不存在 → 数据被清除了 → 生成全新身份
+            // 哨兵不存在或读取失败 → 生成全新身份
             Identity newIdentity = IdentityGenerator.generateRandom();
-
-            // 确保filesDir存在
-            File filesDir = context.getFilesDir();
             if (!filesDir.exists()) {
                 filesDir.mkdirs();
             }
-
-            // 写入新哨兵文件
             Files.write(sentinel.toPath(), newIdentity.toJson().getBytes(StandardCharsets.UTF_8));
-
             cachedIdentity = newIdentity;
             checked = true;
             return newIdentity;
-
         } catch (Throwable t) {
-            // 任何异常都兜底：生成一个新身份，但不写文件（下次启动会再生成）
             if (cachedIdentity == null) {
                 cachedIdentity = IdentityGenerator.generateRandom();
             }
@@ -76,18 +70,15 @@ public class SentinelDetector {
 
     /**
      * 手动重置身份（配置界面的"手动重置"按钮调用）。
-     * 通过删除哨兵文件实现，下次APP启动会自动生成新身份。
      */
     public static boolean resetIdentity(String packageName, Context context) {
         try {
-            // 通过包名获取目标APP的filesDir
             Context targetContext = context.createPackageContext(packageName,
                     Context.MODE_PRIVATE | Context.CONTEXT_IGNORE_SECURITY);
             File sentinel = new File(targetContext.getFilesDir(), SENTINEL_FILE);
             if (sentinel.exists()) {
                 sentinel.delete();
             }
-            // 清除缓存
             cachedIdentity = null;
             checked = false;
             return true;
@@ -96,9 +87,6 @@ public class SentinelDetector {
         }
     }
 
-    /**
-     * 获取当前身份（不触发检测，仅返回已缓存的）。
-     */
     public static Identity getCurrentIdentity() {
         return cachedIdentity;
     }
