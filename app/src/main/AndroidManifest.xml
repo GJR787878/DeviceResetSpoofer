@@ -31,9 +31,9 @@
             </intent-filter>
         </activity>
         <activity
-            android:name=".ui.HelpActivity"
+            android:name=".ui.ConfigActivity"
             android:exported="false"
-            android:label="使用说明" />
+            android:label="应用配置" />
     </application>
 
 </manifest>
