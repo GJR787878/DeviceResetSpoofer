@@ -38,7 +38,7 @@
 
 | 项目 | 要求 |
 |------|------|
-| **Android 版本** | Android 7.0 ~ Android 15 (API 24+) |
+| **Android 版本** | Android 7.0 ~ Android 16 (API 24+) |
 | **Root 权限** | 必须（用于写入哨兵文件） |
 | **Xposed 框架** | LSPosed / LSPosed_mod（推荐） |
 | **架构** | arm64-v8a, armeabi-v7a, x86, x86_64 |
@@ -113,7 +113,7 @@ An LSPosed module that **automatically generates a brand new device identity aft
 
 | Item | Requirement |
 |------|-------------|
-| **Android Version** | Android 7.0 ~ Android 15 (API 24+) |
+| **Android Version** | Android 7.0 ~ Android 16 (API 24+) |
 | **Root Access** | Required (for writing sentinel file) |
 | **Xposed Framework** | LSPosed / LSPosed_mod (recommended) |
 | **Architecture** | arm64-v8a, armeabi-v7a, x86, x86_64 |
@@ -188,7 +188,7 @@ The module places a hidden sentinel file in the target app's private directory. 
 
 | Пункт | Требование |
 |------|-----------|
-| **Версия Android** | Android 7.0 ~ Android 15 (API 24+) |
+| **Версия Android** | Android 7.0 ~ Android 16 (API 24+) |
 | **Root-права** | Обязательно (для записи файла-sentinel) |
 | **Фреймворк Xposed** | LSPosed / LSPosed_mod (рекомендуется) |
 | **Архитектура** | arm64-v8a, armeabi-v7a, x86, x86_64 |
