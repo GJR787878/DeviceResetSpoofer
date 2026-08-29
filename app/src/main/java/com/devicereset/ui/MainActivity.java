@@ -8,11 +8,10 @@ import android.text.Editable;
 import android.text.TextWatcher;
 import android.view.Menu;
 import android.view.MenuItem;
-import android.widget.CompoundButton;
 import android.widget.EditText;
-import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
+import androidx.appcompat.widget.SwitchCompat;
 
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
@@ -43,15 +42,15 @@ public class MainActivity extends AppCompatActivity {
     private AppListAdapter adapter;
     private EditText searchEditText;
     private TextView selectedCountText;
-    private Switch showSystemSwitch;
-    private Switch autoResetSwitch;
-    private Switch hookAndroidIdSwitch;
-    private Switch hookAdIdSwitch;
-    private Switch hookImeiSwitch;
-    private Switch hookBuildSwitch;
-    private Switch hookMacSwitch;
-    private Switch hookGsfSwitch;
-    private Switch hookCarrierSwitch;
+    private SwitchCompat showSystemSwitch;
+    private SwitchCompat autoResetSwitch;
+    private SwitchCompat hookAndroidIdSwitch;
+    private SwitchCompat hookAdIdSwitch;
+    private SwitchCompat hookImeiSwitch;
+    private SwitchCompat hookBuildSwitch;
+    private SwitchCompat hookMacSwitch;
+    private SwitchCompat hookGsfSwitch;
+    private SwitchCompat hookCarrierSwitch;
 
     private List<AppInfo> allApps = new ArrayList<>();
     private Set<String> selectedPackages = new HashSet<>();
