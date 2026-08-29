@@ -1,11 +1,11 @@
 package com.devicereset.hooks;
 
-import android.os.Build;
 import android.telephony.TelephonyManager;
 
 import com.devicereset.xposed.Identity;
 
 import de.robv.android.xposed.XC_MethodHook;
+import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
@@ -16,156 +16,90 @@ public class TelephonyHook {
 
     public static void install(XC_LoadPackage.LoadPackageParam lpparam, Identity identity,
                                boolean hookImei, boolean hookCarrier) {
-        // IMEI / MEID
         if (hookImei) {
-            // getDeviceId() (Android 9及以下常用)
-            try {
-                XposedHelpers.findAndHookMethod(
-                        TelephonyManager.class,
-                        "getDeviceId",
-                        new XC_MethodHook() {
-                            @Override
-                            protected void afterHookedMethod(MethodHookParam param) {
-                                param.setResult(identity.imei);
-                            }
-                        }
-                );
-            } catch (Throwable ignored) {}
+            hookMethodReturn("getDeviceId", identity.imei);
+            hookMethodReturnInt("getDeviceId", int.class, identity.imei);
+            hookMethodReturn("getImei", identity.imei);
+            hookMethodReturnInt("getImei", int.class, identity.imei);
+            hookMethodReturn("getMeid", identity.meid);
+            hookMethodReturnInt("getMeid", int.class, identity.meid);
 
-            // getDeviceId(int slotId)
             try {
-                XposedHelpers.findAndHookMethod(
-                        TelephonyManager.class,
-                        "getDeviceId",
-                        int.class,
+                XposedHelpers.findAndHookMethod(TelephonyManager.class, "getSubscriberId",
                         new XC_MethodHook() {
                             @Override
                             protected void afterHookedMethod(MethodHookParam param) {
-                                param.setResult(identity.imei);
-                            }
-                        }
-                );
-            } catch (Throwable ignored) {}
-
-            // getImei() (Android 10+)
-            try {
-                XposedHelpers.findAndHookMethod(
-                        TelephonyManager.class,
-                        "getImei",
-                        new XC_MethodHook() {
-                            @Override
-                            protected void afterHookedMethod(MethodHookParam param) {
-                                param.setResult(identity.imei);
-                            }
-                        }
-                );
-            } catch (Throwable ignored) {}
-
-            // getImei(int slotId)
-            try {
-                XposedHelpers.findAndHookMethod(
-                        TelephonyManager.class,
-                        "getImei",
-                        int.class,
-                        new XC_MethodHook() {
-                            @Override
-                            protected void afterHookedMethod(MethodHookParam param) {
-                                param.setResult(identity.imei);
-                            }
-                        }
-                );
-            } catch (Throwable ignored) {}
-
-            // getMeid()
-            try {
-                XposedHelpers.findAndHookMethod(
-                        TelephonyManager.class,
-                        "getMeid",
-                        new XC_MethodHook() {
-                            @Override
-                            protected void afterHookedMethod(MethodHookParam param) {
-                                param.setResult(identity.meid);
-                            }
-                        }
-                );
-            } catch (Throwable ignored) {}
-
-            // getMeid(int slotId)
-            try {
-                XposedHelpers.findAndHookMethod(
-                        TelephonyManager.class,
-                        "getMeid",
-                        int.class,
-                        new XC_MethodHook() {
-                            @Override
-                            protected void afterHookedMethod(MethodHookParam param) {
-                                param.setResult(identity.meid);
-                            }
-                        }
-                );
-            } catch (Throwable ignored) {}
-
-            // getSubscriberId() (IMSI)
-            try {
-                XposedHelpers.findAndHookMethod(
-                        TelephonyManager.class,
-                        "getSubscriberId",
-                        new XC_MethodHook() {
-                            @Override
-                            protected void afterHookedMethod(MethodHookParam param) {
-                                // IMI = MCC+MNC+MSIN，用运营商码+随机9位
-                                String imsi = identity.simOperator + String.format("%09d",
-                                        (int) (Math.random() * 1000000000L));
-                                param.setResult(imsi);
-                            }
-                        }
-                );
-            } catch (Throwable ignored) {}
-
-            // getSimSerialNumber() (ICCID)
-            try {
-                XposedHelpers.findAndHookMethod(
-                        TelephonyManager.class,
-                        "getSimSerialNumber",
-                        new XC_MethodHook() {
-                            @Override
-                            protected void afterHookedMethod(MethodHookParam param) {
-                                // ICCID: 8986 + 随机16位
-                                StringBuilder iccid = new StringBuilder("8986");
-                                for (int i = 0; i < 16; i++) {
-                                    iccid.append((int) (Math.random() * 10));
+                                try {
+                                    String imsi = identity.simOperator + String.format("%09d",
+                                            (int) (Math.random() * 1000000000L));
+                                    param.setResult(imsi);
+                                } catch (Throwable t) {
+                                    XposedBridge.log("[DeviceReset] getSubscriberId error: " + t.getMessage());
                                 }
-                                param.setResult(iccid.toString());
                             }
-                        }
-                );
+                        });
+            } catch (Throwable ignored) {}
+
+            try {
+                XposedHelpers.findAndHookMethod(TelephonyManager.class, "getSimSerialNumber",
+                        new XC_MethodHook() {
+                            @Override
+                            protected void afterHookedMethod(MethodHookParam param) {
+                                try {
+                                    StringBuilder iccid = new StringBuilder("8986");
+                                    for (int i = 0; i < 16; i++) {
+                                        iccid.append((int) (Math.random() * 10));
+                                    }
+                                    param.setResult(iccid.toString());
+                                } catch (Throwable t) {
+                                    XposedBridge.log("[DeviceReset] getSimSerialNumber error: " + t.getMessage());
+                                }
+                            }
+                        });
             } catch (Throwable ignored) {}
         }
 
-        // 运营商信息
         if (hookCarrier) {
-            hookCarrierMethod("getNetworkOperator", identity.networkOperator);
-            hookCarrierMethod("getNetworkOperatorName", identity.networkOperatorName);
-            hookCarrierMethod("getSimOperator", identity.simOperator);
-            hookCarrierMethod("getSimOperatorName", identity.simOperatorName);
-            hookCarrierMethod("getSimCountryIso", identity.simCountryIso);
-            hookCarrierMethod("getNetworkCountryIso", identity.networkCountryIso);
+            hookMethodReturn("getNetworkOperator", identity.networkOperator);
+            hookMethodReturn("getNetworkOperatorName", identity.networkOperatorName);
+            hookMethodReturn("getSimOperator", identity.simOperator);
+            hookMethodReturn("getSimOperatorName", identity.simOperatorName);
+            hookMethodReturn("getSimCountryIso", identity.simCountryIso);
+            hookMethodReturn("getNetworkCountryIso", identity.networkCountryIso);
         }
     }
 
-    private static void hookCarrierMethod(String methodName, String value) {
+    private static void hookMethodReturn(String methodName, String value) {
         if (value == null) return;
         try {
-            XposedHelpers.findAndHookMethod(
-                    TelephonyManager.class,
-                    methodName,
+            XposedHelpers.findAndHookMethod(TelephonyManager.class, methodName,
                     new XC_MethodHook() {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
-                            param.setResult(value);
+                            try {
+                                param.setResult(value);
+                            } catch (Throwable t) {
+                                XposedBridge.log("[DeviceReset] " + methodName + " error: " + t.getMessage());
+                            }
                         }
-                    }
-            );
+                    });
+        } catch (Throwable ignored) {}
+    }
+
+    private static void hookMethodReturnInt(String methodName, Class<?> paramType, String value) {
+        if (value == null) return;
+        try {
+            XposedHelpers.findAndHookMethod(TelephonyManager.class, methodName, paramType,
+                    new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            try {
+                                param.setResult(value);
+                            } catch (Throwable t) {
+                                XposedBridge.log("[DeviceReset] " + methodName + "(int) error: " + t.getMessage());
+                            }
+                        }
+                    });
         } catch (Throwable ignored) {}
     }
 }

@@ -170,6 +170,19 @@
             <androidx.appcompat.widget.SwitchCompat android:id="@+id/switch_hook_carrier"/>
         </LinearLayout>
 
+        <!-- 使用说明大按钮 -->
+        <Button
+            android:id="@+id/btn_help"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="📖 使用说明（必看）"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:backgroundTint="#6200EE"
+            android:textColor="#FFFFFF"
+            android:padding="14dp"
+            android:layout_marginTop="16dp"/>
+
         <!-- 底部提示 -->
         <TextView
             android:layout_width="match_parent"
