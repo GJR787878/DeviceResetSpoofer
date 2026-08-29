@@ -2,9 +2,9 @@ package com.devicereset.hooks;
 
 import android.content.ContentProvider;
 import android.content.ContentResolver;
+import android.database.CharArrayBuffer;
 import android.database.Cursor;
 import android.net.Uri;
-import android.text.CharArrayBuffer;
 
 import com.devicereset.xposed.Identity;
 
