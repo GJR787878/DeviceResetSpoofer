@@ -170,18 +170,32 @@
             <androidx.appcompat.widget.SwitchCompat android:id="@+id/switch_hook_carrier"/>
         </LinearLayout>
 
-        <!-- 使用说明大按钮 -->
-        <Button
-            android:id="@+id/btn_help"
+        <!-- 使用说明（直接显示） -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@android:color/darker_gray"
+            android:layout_marginTop="16dp"/>
+
+        <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="📖 使用说明（必看）"
+            android:text="📖 使用说明"
             android:textSize="16sp"
             android:textStyle="bold"
-            android:backgroundTint="#6200EE"
-            android:textColor="#FFFFFF"
-            android:padding="14dp"
-            android:layout_marginTop="16dp"/>
+            android:textColor="#6200EE"
+            android:layout_marginTop="12dp"/>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="【功能】对选中的应用，清除应用数据后自动生成全新设备识别码。&#10;&#10;【使用步骤】&#10;1. LSPosed管理器 → 模块 → 启用本模块 → 作用域勾选目标应用&#10;2. 重启手机&#10;3. 本界面勾选目标应用&#10;4. 系统设置 → 应用 → 清除数据&#10;5. 重新打开应用即获得新身份&#10;&#10;【伪装内容】Android ID、广告ID、IMEI/MEID、设备型号、MAC地址、GSF ID、运营商信息&#10;&#10;【注意】&#10;• 部分应用会检测Xposed/Root，有封号风险&#10;• 加壳应用请在LSPosed作用域设置中勾选「排除资源钩子」&#10;• 排查问题：LSPosed → 日志 → 搜索「DeviceReset」&#10;• 右上角菜单可手动重置身份"
+            android:textSize="13sp"
+            android:textColor="@android:color/black"
+            android:lineSpacingExtra="3dp"
+            android:layout_marginTop="8dp"
+            android:background="#F5F0FF"
+            android:padding="12dp"/>
 
         <!-- 底部提示 -->
         <TextView

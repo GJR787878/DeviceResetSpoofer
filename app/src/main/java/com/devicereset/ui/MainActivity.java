@@ -99,10 +99,6 @@ public class MainActivity extends AppCompatActivity {
             updateAppList();
         });
 
-        // 使用说明按钮
-        findViewById(R.id.btn_help).setOnClickListener(v ->
-                startActivity(new android.content.Intent(this, HelpActivity.class)));
-
         // 各开关监听
         autoResetSwitch.setOnCheckedChangeListener((v, checked) -> Config.setAutoReset(this, checked));
         hookAndroidIdSwitch.setOnCheckedChangeListener((v, checked) -> Config.setHookAndroidId(this, checked));
