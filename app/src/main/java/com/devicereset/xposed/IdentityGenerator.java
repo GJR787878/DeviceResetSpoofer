@@ -111,7 +111,7 @@ public class IdentityGenerator {
         // Build时间（随机过去一年内的时间戳）
         long now = System.currentTimeMillis();
         long oneYear = 365L * 24 * 60 * 60 * 1000;
-        id.buildTime = String.valueOf(now - RANDOM.nextLong(oneYear));
+        id.buildTime = String.valueOf(now - Math.abs(RANDOM.nextLong()) % oneYear);
 
         // 运营商信息
         String[] carrier = CARRIER_PROFILES[RANDOM.nextInt(CARRIER_PROFILES.length)];
