@@ -9,9 +9,6 @@ import com.devicereset.hooks.GsfIdHook;
 import com.devicereset.hooks.TelephonyHook;
 import com.devicereset.hooks.WifiMacHook;
 
-import java.util.HashSet;
-import java.util.Set;
-
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XSharedPreferences;
 import de.robv.android.xposed.XposedBridge;
@@ -21,7 +18,7 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
 /**
  * LSPosed模块主入口。
  *
- * 关键：直接在handleLoadPackage中完成所有操作，不依赖额外Hook。
+ * 直接对所有LSPosed作用域中的应用生效，无需在模块内再次选择应用。
  * 通过反射获取当前ActivityThread的mBoundApplication.appInfo.dataDir，
  * 立刻执行哨兵检测并安装所有设备ID Hook。
  */
@@ -50,20 +47,7 @@ public class MainHook implements IXposedHookLoadPackage {
             try { xPrefs.reload(); } catch (Throwable ignored) {}
         }
 
-        // 检查是否是目标应用（fallback：配置读取失败时默认生效）
-        boolean isTarget = true;
-        if (prefsAvailable) {
-            try {
-                Set<String> targets = xPrefs.getStringSet("target_packages", new HashSet<>());
-                if (targets != null && !targets.isEmpty()) {
-                    isTarget = targets.contains(lpparam.packageName);
-                }
-            } catch (Throwable t) {
-                isTarget = true;
-            }
-        }
-        if (!isTarget) return;
-
+        // 直接对所有LSPosed作用域中的应用生效
         XposedBridge.log("[DeviceReset] handleLoadPackage for: " + lpparam.packageName);
 
         // 读取各Hook开关
@@ -82,12 +66,10 @@ public class MainHook implements IXposedHookLoadPackage {
                 XposedBridge.log("[DeviceReset] ERROR: cannot get dataDir for " + lpparam.packageName);
                 return;
             }
-
             XposedBridge.log("[DeviceReset] dataDir resolved: " + filesDir);
 
             // 核心：检测哨兵文件，决定本次身份
             Identity identity = SentinelDetector.checkAndGetIdentityByDir(filesDir);
-
             XposedBridge.log("[DeviceReset] Identity loaded: androidId=" + identity.androidId
                     + ", model=" + identity.model
                     + ", brand=" + identity.brand);
@@ -119,7 +101,6 @@ public class MainHook implements IXposedHookLoadPackage {
             }
 
             XposedBridge.log("[DeviceReset] ALL hooks installed successfully for " + lpparam.packageName);
-
         } catch (Throwable t) {
             XposedBridge.log("[DeviceReset] FATAL error: " + t.getMessage());
             XposedBridge.log(t);
@@ -128,12 +109,9 @@ public class MainHook implements IXposedHookLoadPackage {
 
     /**
      * 获取当前进程的filesDir路径。
-     * 优先通过反射ActivityThread.currentActivityThread().mBoundApplication.appInfo.dataDir获取，
-     * fallback到包名构建路径。
      */
     private String getDataDir(String packageName) {
         try {
-            // 方式1：通过反射ActivityThread获取
             Class<?> activityThreadClass = XposedHelpers.findClass("android.app.ActivityThread", null);
             Object activityThread = XposedHelpers.callStaticMethod(activityThreadClass, "currentActivityThread");
             if (activityThread != null) {
@@ -148,9 +126,7 @@ public class MainHook implements IXposedHookLoadPackage {
         } catch (Throwable t) {
             XposedBridge.log("[DeviceReset] get dataDir via ActivityThread failed: " + t.getMessage());
         }
-
         try {
-            // 方式2：通过反射获取当前Application
             Class<?> activityThreadClass = XposedHelpers.findClass("android.app.ActivityThread", null);
             Object app = XposedHelpers.callStaticMethod(activityThreadClass, "currentApplication");
             if (app != null) {
@@ -162,9 +138,6 @@ public class MainHook implements IXposedHookLoadPackage {
         } catch (Throwable t) {
             XposedBridge.log("[DeviceReset] get dataDir via Application failed: " + t.getMessage());
         }
-
-        // 方式3：fallback，用包名构建（主用户路径）
-        XposedBridge.log("[DeviceReset] using fallback dataDir path for " + packageName);
         return "/data/data/" + packageName + "/files";
     }
 
