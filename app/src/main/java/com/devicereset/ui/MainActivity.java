@@ -53,6 +53,7 @@ public class MainActivity extends AppCompatActivity {
         TextView tvSpoofTitle = findViewById(R.id.tv_spoof_title);
         TextView tvSpoofContent = findViewById(R.id.tv_spoof_content);
         TextView tvWarningTitle = findViewById(R.id.tv_warning_title);
+        TextView tvWarningContent = findViewById(R.id.tv_warning_content);
         Button btnConfig = findViewById(R.id.btn_open_config);
         Button btnLang = findViewById(R.id.btn_switch_lang);
 
