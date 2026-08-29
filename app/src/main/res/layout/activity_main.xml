@@ -174,8 +174,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="\n提示：在LSPosed中启用模块后，需勾选目标应用的作用域。" +
-                "\n菜单中可手动重置某个应用的身份。"
+            android:text="&#10;提示：在LSPosed中启用模块后，需勾选目标应用的作用域。&#10;菜单中可手动重置某个应用的身份。"
             android:textSize="12sp"
             android:textColor="@android:color/darker_gray"
             android:layout_marginTop="16dp"/>
