@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DeviceResetSpoofer</string>
+    <string name="module_description">清除应用数据后自动生成全新设备识别码的LSPosed模块</string>
+</resources>

@@ -1,0 +1,2 @@
+-keep class com.devicereset.xposed.** { *; }
+-dontwarn de.robv.android.xposed.**
