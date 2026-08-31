@@ -21,6 +21,7 @@ public class ConfigActivity extends AppCompatActivity {
     private static final String PREFS_LANG = "app_language";
     private static final String LANG_ZH = "zh";
     private static final String LANG_EN = "en";
+    private static final String LANG_RU = "ru";
 
     private String currentLang;
     private SwitchCompat hookAndroidIdSwitch;
@@ -49,11 +50,14 @@ public class ConfigActivity extends AppCompatActivity {
 
     private void updateLanguage() {
         boolean isZh = LANG_ZH.equals(currentLang);
+        boolean isEn = LANG_EN.equals(currentLang);
 
         if (isZh) {
             setTitle("应用配置");
-        } else {
+        } else if (isEn) {
             setTitle("Config");
+        } else {
+            setTitle("Настройки");
         }
 
         TextView tvScopeTitle = findViewById(R.id.tv_scope_title);
@@ -80,7 +84,7 @@ public class ConfigActivity extends AppCompatActivity {
             tvGsf.setText("伪装 GSF ID");
             tvCarrier.setText("伪装 运营商信息");
             tvFooter.setText("右上角菜单可手动重置身份。\n排查问题：LSPosed → 日志 → 搜索「DeviceReset」");
-        } else {
+        } else if (isEn) {
             tvScopeTitle.setText("ℹ️ Scope");
             tvScopeContent.setText("This module applies to all apps checked in LSPosed scope. No need to select again here.\n\nCheck target apps in LSPosed Manager → Reboot → Clear target app data → Reopen to get new identity.");
             tvSpoofTitle.setText("🎭 Spoofing Options");
@@ -92,6 +96,18 @@ public class ConfigActivity extends AppCompatActivity {
             tvGsf.setText("Spoof GSF ID");
             tvCarrier.setText("Spoof Carrier Info");
             tvFooter.setText("Manually reset identity from top-right menu.\nTroubleshooting: LSPosed → Logs → Search \"DeviceReset\"");
+        } else {
+            tvScopeTitle.setText("ℹ️ Область");
+            tvScopeContent.setText("Модуль применяется ко всем приложениям, отмеченным в области LSPosed. Не нужно выбирать снова здесь.\n\nОтметьте целевые приложения в LSPosed Manager → Перезагрузка → Очистить данные целевого приложения → Переоткройте для получения новой идентичности.");
+            tvSpoofTitle.setText("🎭 Параметры подмены");
+            tvAndroidId.setText("Подмена Android ID");
+            tvAdId.setText("Подмена рекламного ID (AAID)");
+            tvImei.setText("Подмена IMEI/MEID");
+            tvBuild.setText("Подмена модели устройства (Build)");
+            tvMac.setText("Подмена MAC-адреса");
+            tvGsf.setText("Подмена GSF ID");
+            tvCarrier.setText("Подмена информации об операторе");
+            tvFooter.setText("Ручной сброс идентичности из меню в правом верхнем углу.\nУстранение неполадок: LSPosed → Журналы → Поиск «DeviceReset»");
         }
     }
 
@@ -140,12 +156,16 @@ public class ConfigActivity extends AppCompatActivity {
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
         boolean isZh = LANG_ZH.equals(currentLang);
+        boolean isEn = LANG_EN.equals(currentLang);
         if (isZh) {
             menu.add(0, 1, 0, "手动重置身份");
             menu.add(0, 2, 1, "关于");
-        } else {
+        } else if (isEn) {
             menu.add(0, 1, 0, "Reset Identity");
             menu.add(0, 2, 1, "About");
+        } else {
+            menu.add(0, 1, 0, "Сбросить идентичность");
+            menu.add(0, 2, 1, "О программе");
         }
         return true;
     }
@@ -164,46 +184,102 @@ public class ConfigActivity extends AppCompatActivity {
 
     private void showResetDialog() {
         boolean isZh = LANG_ZH.equals(currentLang);
+        boolean isEn = LANG_EN.equals(currentLang);
         final EditText input = new EditText(this);
-        input.setHint(isZh ? "输入应用包名，如 com.example.app" : "Enter package name, e.g. com.example.app");
+        if (isZh) {
+            input.setHint("输入应用包名，如 com.example.app");
+        } else if (isEn) {
+            input.setHint("Enter package name, e.g. com.example.app");
+        } else {
+            input.setHint("Введите имя пакета, например com.example.app");
+        }
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
         layout.setPadding(48, 24, 48, 24);
         layout.addView(input);
 
+        String title, message, positive, negative, emptyMsg, successPrefix, successSuffix, failMsg, errorPrefix;
+        if (isZh) {
+            title = "手动重置身份";
+            message = "输入要重置身份的应用包名。重置后该应用下次启动将获得全新设备身份（无需清除数据）。";
+            positive = "重置";
+            negative = "取消";
+            emptyMsg = "请输入包名";
+            successPrefix = "已重置 ";
+            successSuffix = " 的身份";
+            failMsg = "重置失败，请确保已授予ROOT权限";
+            errorPrefix = "重置异常：";
+        } else if (isEn) {
+            title = "Reset Identity";
+            message = "Enter the package name of the app to reset. Next launch will get a brand new device identity (no need to clear data).";
+            positive = "Reset";
+            negative = "Cancel";
+            emptyMsg = "Please enter package name";
+            successPrefix = "Reset ";
+            successSuffix = " identity";
+            failMsg = "Reset failed, please ensure ROOT access";
+            errorPrefix = "Error: ";
+        } else {
+            title = "Сбросить идентичность";
+            message = "Введите имя пакета приложения для сброса. При следующем запуске будет получена новая идентификация устройства (без очистки данных).";
+            positive = "Сбросить";
+            negative = "Отмена";
+            emptyMsg = "Введите имя пакета";
+            successPrefix = "Сброшена идентичность ";
+            successSuffix = "";
+            failMsg = "Сброс не удался, убедитесь в наличии Root-прав";
+            errorPrefix = "Ошибка: ";
+        }
+
+        final String fEmptyMsg = emptyMsg;
+        final String fSuccessPrefix = successPrefix;
+        final String fSuccessSuffix = successSuffix;
+        final String fFailMsg = failMsg;
+        final String fErrorPrefix = errorPrefix;
+
         new AlertDialog.Builder(this)
-                .setTitle(isZh ? "手动重置身份" : "Reset Identity")
-                .setMessage(isZh ? "输入要重置身份的应用包名。重置后该应用下次启动将获得全新设备身份（无需清除数据）。"
-                        : "Enter the package name of the app to reset. Next launch will get a brand new device identity (no need to clear data).")
+                .setTitle(title)
+                .setMessage(message)
                 .setView(layout)
-                .setPositiveButton(isZh ? "重置" : "Reset", (dialog, which) -> {
+                .setPositiveButton(positive, (dialog, which) -> {
                     String pkg = input.getText().toString().trim();
                     if (pkg.isEmpty()) {
-                        Toast.makeText(this, isZh ? "请输入包名" : "Please enter package name", Toast.LENGTH_SHORT).show();
+                        Toast.makeText(this, fEmptyMsg, Toast.LENGTH_SHORT).show();
                         return;
                     }
                     try {
                         boolean success = SentinelDetector.resetIdentity(pkg, this);
                         if (success) {
-                            Toast.makeText(this, (isZh ? "已重置 " : "Reset ") + pkg + (isZh ? " 的身份" : " identity"), Toast.LENGTH_LONG).show();
+                            Toast.makeText(this, fSuccessPrefix + pkg + fSuccessSuffix, Toast.LENGTH_LONG).show();
                         } else {
-                            Toast.makeText(this, isZh ? "重置失败，请确保已授予ROOT权限" : "Reset failed, please ensure ROOT access", Toast.LENGTH_LONG).show();
+                            Toast.makeText(this, fFailMsg, Toast.LENGTH_LONG).show();
                         }
                     } catch (Throwable t) {
-                        Toast.makeText(this, (isZh ? "重置异常：" : "Error: ") + t.getMessage(), Toast.LENGTH_LONG).show();
+                        Toast.makeText(this, fErrorPrefix + t.getMessage(), Toast.LENGTH_LONG).show();
                     }
                 })
-                .setNegativeButton(isZh ? "取消" : "Cancel", null)
+                .setNegativeButton(negative, null)
                 .show();
     }
 
     private void showAboutDialog() {
         boolean isZh = LANG_ZH.equals(currentLang);
+        boolean isEn = LANG_EN.equals(currentLang);
+        String message, positive;
+        if (isZh) {
+            message = "版本：1.0.4\n\n清除应用数据后自动生成全新设备识别码的LSPosed模块。\n\n直接对LSPosed作用域中勾选的应用生效。\n支持中文 / English / Русский";
+            positive = "确定";
+        } else if (isEn) {
+            message = "Version: 1.0.4\n\nLSPosed module that auto-generates new device identity after clearing app data.\n\nApplies to all apps checked in LSPosed scope.\nSupports 中文 / English / Русский";
+            positive = "OK";
+        } else {
+            message = "Версия: 1.0.4\n\nМодуль LSPosed, автоматически генерирующий новую идентификацию устройства после очистки данных приложения.\n\nПрименяется ко всем приложениям, отмеченным в области LSPosed.\nПоддерживает 中文 / English / Русский";
+            positive = "ОК";
+        }
         new AlertDialog.Builder(this)
                 .setTitle("DeviceResetSpoofer")
-                .setMessage(isZh ? "版本：1.0.2\n\n清除应用数据后自动生成全新设备识别码的LSPosed模块。\n\n直接对LSPosed作用域中勾选的应用生效。"
-                        : "Version: 1.0.2\n\nLSPosed module that auto-generates new device identity after clearing app data.\n\nApplies to all apps checked in LSPosed scope.")
-                .setPositiveButton(isZh ? "确定" : "OK", null)
+                .setMessage(message)
+                .setPositiveButton(positive, null)
                 .show();
     }
 }

@@ -14,6 +14,7 @@ public class MainActivity extends AppCompatActivity {
     private static final String PREFS_LANG = "app_language";
     private static final String LANG_ZH = "zh";
     private static final String LANG_EN = "en";
+    private static final String LANG_RU = "ru";
 
     private String currentLang;
 
@@ -22,29 +23,31 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        // 读取语言设置，默认中文
         SharedPreferences prefs = getSharedPreferences("devicereset_ui", MODE_PRIVATE);
         currentLang = prefs.getString(PREFS_LANG, LANG_ZH);
 
         updateUI();
 
-        // 运行日志按钮 -> 进入配置界面
         Button btnConfig = findViewById(R.id.btn_open_config);
         btnConfig.setOnClickListener(v ->
                 startActivity(new Intent(this, ConfigActivity.class)));
 
-        // 中英文切换按钮
+        // 三语循环切换：中 -> 英 -> 俄 -> 中
         Button btnLang = findViewById(R.id.btn_switch_lang);
         btnLang.setOnClickListener(v -> {
-            currentLang = LANG_ZH.equals(currentLang) ? LANG_EN : LANG_ZH;
+            if (LANG_ZH.equals(currentLang)) {
+                currentLang = LANG_EN;
+            } else if (LANG_EN.equals(currentLang)) {
+                currentLang = LANG_RU;
+            } else {
+                currentLang = LANG_ZH;
+            }
             prefs.edit().putString(PREFS_LANG, currentLang).apply();
             updateUI();
         });
     }
 
     private void updateUI() {
-        boolean isZh = LANG_ZH.equals(currentLang);
-
         TextView tvSubtitle = findViewById(R.id.tv_subtitle);
         TextView tvUsageTitle = findViewById(R.id.tv_usage_title);
         TextView tvUsageContent = findViewById(R.id.tv_usage_content);
@@ -57,13 +60,13 @@ public class MainActivity extends AppCompatActivity {
         Button btnConfig = findViewById(R.id.btn_open_config);
         Button btnLang = findViewById(R.id.btn_switch_lang);
 
-        if (isZh) {
+        if (LANG_ZH.equals(currentLang)) {
             tvSubtitle.setText("清除应用数据后自动生成全新设备识别码");
             tvUsageTitle.setText("📖 使用方法");
             tvUsageContent.setText(
                     "1. LSPosed管理器 → 模块 → 启用本模块 → 作用域勾选目标应用\n" +
                     "2. 重启手机（必须重启）\n" +
-                    "3. 点击上方「运行日志」按钮，勾选目标应用\n" +
+                    "3. 点击上方「运行日志」按钮进入配置\n" +
                     "4. 系统设置 → 应用 → 目标应用 → 存储 → 清除数据\n" +
                     "5. 重新打开应用，即获得全新设备身份");
             tvPrincipleTitle.setText("🔧 工作原理");
@@ -88,14 +91,14 @@ public class MainActivity extends AppCompatActivity {
                     "• 排查问题：LSPosed → 日志 → 搜索「DeviceReset」\n" +
                     "• 配置界面右上角菜单可手动重置身份");
             btnConfig.setText("📋 运行日志");
-            btnLang.setText("🌐 EN / 中文");
-        } else {
+            btnLang.setText("🌐 中/EN/RU");
+        } else if (LANG_EN.equals(currentLang)) {
             tvSubtitle.setText("Auto-generate new device identity after clearing app data");
             tvUsageTitle.setText("📖 Usage");
             tvUsageContent.setText(
                     "1. LSPosed Manager → Modules → Enable this module → Check target apps in Scope\n" +
                     "2. Reboot phone (required)\n" +
-                    "3. Tap \"Run Log\" button above, check target apps\n" +
+                    "3. Tap \"Run Log\" button above to enter config\n" +
                     "4. System Settings → Apps → Target app → Storage → Clear data\n" +
                     "5. Reopen the app to get a brand new device identity");
             tvPrincipleTitle.setText("🔧 How It Works");
@@ -120,7 +123,40 @@ public class MainActivity extends AppCompatActivity {
                     "• Troubleshooting: LSPosed → Logs → Search \"DeviceReset\"\n" +
                     "• Manually reset identity from the config app's menu");
             btnConfig.setText("📋 Run Log");
-            btnLang.setText("🌐 中文 / EN");
+            btnLang.setText("🌐 中/EN/RU");
+        } else {
+            // Russian
+            tvSubtitle.setText("Автоматическая генерация новой идентификации устройства после очистки данных");
+            tvUsageTitle.setText("📖 Использование");
+            tvUsageContent.setText(
+                    "1. LSPosed Manager → Модули → Включить модуль → Отметить целевые приложения в Области\n" +
+                    "2. Перезагрузите телефон (обязательно)\n" +
+                    "3. Нажмите кнопку «Журнал запуска» выше для входа в настройки\n" +
+                    "4. Настройки системы → Приложения → Целевое приложение → Память → Очистить данные\n" +
+                    "5. Переоткройте приложение, чтобы получить новую идентификацию");
+            tvPrincipleTitle.setText("🔧 Как это работает");
+            tvPrincipleContent.setText(
+                    "Модуль помещает скрытый файл-sentinel в приватный каталог целевого приложения. Очистка данных удаляет весь приватный каталог, включая файл-sentinel. При следующем запуске модуль обнаруживает отсутствие sentinel и генерирует новую идентификацию устройства, записывая новый файл-sentinel.");
+            tvSpoofTitle.setText("🎭 Подменяемые идентификаторы");
+            tvSpoofContent.setText(
+                    "• Android ID (SSAID)\n" +
+                    "• Рекламный ID (AAID) / AppSet ID\n" +
+                    "• IMEI / MEID / IMSI / ICCID\n" +
+                    "• Серийный номер / MAC-адрес\n" +
+                    "• GSF ID\n" +
+                    "• Информация об устройстве: бренд, модель, производитель, отпечаток Build\n" +
+                    "• Информация об операторе: код, название, страна");
+            tvWarningTitle.setText("⚠️ Предупреждения");
+            tvWarningContent.setText(
+                    "• Только для защиты личной конфиденциальности и технического тестирования\n" +
+                    "• Некоторые приложения обнаруживают следы Xposed/Root, существует риск блокировки аккаунта\n" +
+                    "• Для упакованных приложений включите «Исключить хуки ресурсов» в настройках области LSPosed\n" +
+                    "• Приложения, читающие системные свойства на нативном уровне, не могут быть перехвачены Java-хуками\n" +
+                    "• Сначала тестируйте на некритичных приложениях\n" +
+                    "• Устранение неполадок: LSPosed → Журналы → Поиск «DeviceReset»\n" +
+                    "• Ручной сброс идентичности из меню в правом верхнем углу настроек");
+            btnConfig.setText("📋 Журнал");
+            btnLang.setText("🌐 中/EN/RU");
         }
     }
 }
