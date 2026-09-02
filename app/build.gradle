@@ -3,11 +3,11 @@ plugins {
 }
 
 android {
-    namespace 'com.devicereset'
+    namespace 'io.github.gjr787878.devicereset'
     compileSdk 34
 
     defaultConfig {
-        applicationId "com.devicereset"
+        applicationId "io.github.gjr787878.devicereset"
         minSdk 24
         targetSdk 34
         versionCode 1

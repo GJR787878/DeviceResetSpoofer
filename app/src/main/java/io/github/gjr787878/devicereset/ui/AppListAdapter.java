@@ -1,4 +1,4 @@
-package com.devicereset.ui;
+package io.github.gjr787878.devicereset.ui;
 
 import android.view.LayoutInflater;
 import android.view.View;
@@ -10,7 +10,7 @@ import android.widget.TextView;
 import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.RecyclerView;
 
-import com.devicereset.R;
+import io.github.gjr787878.devicereset.R;
 
 import java.util.ArrayList;
 import java.util.List;

@@ -1,4 +1,4 @@
-package com.devicereset.ui;
+package io.github.gjr787878.devicereset.ui;
 
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -8,7 +8,7 @@ import android.widget.TextView;
 
 import androidx.appcompat.app.AppCompatActivity;
 
-import com.devicereset.R;
+import io.github.gjr787878.devicereset.R;
 
 public class MainActivity extends AppCompatActivity {
     private static final String PREFS_LANG = "app_language";

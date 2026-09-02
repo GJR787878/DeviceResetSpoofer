@@ -1,4 +1,4 @@
-package com.devicereset.ui;
+package io.github.gjr787878.devicereset.ui;
 
 import android.graphics.drawable.Drawable;
 

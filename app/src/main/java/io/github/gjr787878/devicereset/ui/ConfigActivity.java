@@ -1,4 +1,4 @@
-package com.devicereset.ui;
+package io.github.gjr787878.devicereset.ui;
 
 import android.content.SharedPreferences;
 import android.os.Bundle;
@@ -13,9 +13,9 @@ import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.SwitchCompat;
 
-import com.devicereset.Config;
-import com.devicereset.R;
-import com.devicereset.xposed.SentinelDetector;
+import io.github.gjr787878.devicereset.Config;
+import io.github.gjr787878.devicereset.R;
+import io.github.gjr787878.devicereset.xposed.SentinelDetector;
 
 public class ConfigActivity extends AppCompatActivity {
     private static final String PREFS_LANG = "app_language";

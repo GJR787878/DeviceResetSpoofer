@@ -1,13 +1,13 @@
-package com.devicereset.xposed;
+package io.github.gjr787878.devicereset.xposed;
 
 import android.content.pm.ApplicationInfo;
 
-import com.devicereset.hooks.AdvertisingIdHook;
-import com.devicereset.hooks.AndroidIdHook;
-import com.devicereset.hooks.BuildInfoHook;
-import com.devicereset.hooks.GsfIdHook;
-import com.devicereset.hooks.TelephonyHook;
-import com.devicereset.hooks.WifiMacHook;
+import io.github.gjr787878.devicereset.hooks.AdvertisingIdHook;
+import io.github.gjr787878.devicereset.hooks.AndroidIdHook;
+import io.github.gjr787878.devicereset.hooks.BuildInfoHook;
+import io.github.gjr787878.devicereset.hooks.GsfIdHook;
+import io.github.gjr787878.devicereset.hooks.TelephonyHook;
+import io.github.gjr787878.devicereset.hooks.WifiMacHook;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XSharedPreferences;

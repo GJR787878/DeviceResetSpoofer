@@ -1,4 +1,4 @@
-package com.devicereset;
+package io.github.gjr787878.devicereset;
 
 import android.content.Context;
 import android.content.SharedPreferences;

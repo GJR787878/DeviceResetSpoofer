@@ -1,2 +1,2 @@
--keep class com.devicereset.xposed.** { *; }
+-keep class io.github.gjr787878.devicereset.xposed.** { *; }
 -dontwarn de.robv.android.xposed.**

@@ -1,9 +1,9 @@
-package com.devicereset.hooks;
+package io.github.gjr787878.devicereset.hooks;
 
 import android.content.ContentResolver;
 import android.provider.Settings;
 
-import com.devicereset.xposed.Identity;
+import io.github.gjr787878.devicereset.xposed.Identity;
 
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;

@@ -1,4 +1,4 @@
-package com.devicereset.xposed;
+package io.github.gjr787878.devicereset.xposed;
 
 import java.security.SecureRandom;
 import java.util.UUID;

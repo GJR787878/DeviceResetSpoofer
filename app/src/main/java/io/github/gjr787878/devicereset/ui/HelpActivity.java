@@ -1,4 +1,4 @@
-package com.devicereset.ui;
+package io.github.gjr787878.devicereset.ui;
 
 import android.os.Bundle;
 import android.text.method.LinkMovementMethod;
@@ -6,7 +6,7 @@ import android.widget.TextView;
 
 import androidx.appcompat.app.AppCompatActivity;
 
-import com.devicereset.R;
+import io.github.gjr787878.devicereset.R;
 
 /**
  * 使用说明页面。
