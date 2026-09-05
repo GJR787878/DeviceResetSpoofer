@@ -1,28 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 玻璃胶囊按钮 - 默认态：五层叠加（渐变描边+深色填充+顶部高光+底部阴影） -->
+<!-- 玻璃胶囊按钮 - 默认态：渐变描边+深色填充+顶部高光+底部阴影 -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- 第1层：渐变描边（上亮下暗，模拟玻璃边缘折射） -->
+    <!-- 渐变描边（上亮下暗） -->
     <item>
         <shape android:shape="rectangle">
             <gradient
                 android:angle="270"
-                android:startColor="#99FFFFFF"
-                android:endColor="#33FFFFFF" />
+                android:startColor="#80FFFFFF"
+                android:centerColor="#33FFFFFF"
+                android:endColor="#1AFFFFFF" />
             <corners android:radius="24dp" />
         </shape>
     </item>
-    <!-- 第2层：半透明深色填充（内缩1dp露出描边） -->
+    <!-- 半透明深色填充 -->
     <item
         android:left="1dp"
         android:top="1dp"
         android:right="1dp"
         android:bottom="1dp">
         <shape android:shape="rectangle">
-            <solid android:color="#331C1C1E" />
+            <solid android:color="#401C1C1E" />
             <corners android:radius="23dp" />
         </shape>
     </item>
-    <!-- 第3层：顶部白色高光渐变 -->
+    <!-- 顶部高光（集中在顶部，快速衰减） -->
     <item
         android:left="1dp"
         android:top="1dp"
@@ -31,12 +32,13 @@
         <shape android:shape="rectangle">
             <gradient
                 android:angle="270"
-                android:startColor="#4DFFFFFF"
-                android:endColor="#00FFFFFF" />
+                android:startColor="#33FFFFFF"
+                android:centerColor="#0DFFFFFF"
+                android:endColor="#00000000" />
             <corners android:radius="23dp" />
         </shape>
     </item>
-    <!-- 第4层：底部黑色内阴影 -->
+    <!-- 底部内阴影 -->
     <item
         android:left="1dp"
         android:top="1dp"
@@ -46,7 +48,8 @@
             <gradient
                 android:angle="270"
                 android:startColor="#00000000"
-                android:endColor="#40000000" />
+                android:centerColor="#0D000000"
+                android:endColor="#33000000" />
             <corners android:radius="23dp" />
         </shape>
     </item>

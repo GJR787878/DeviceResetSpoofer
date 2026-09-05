@@ -31,6 +31,16 @@ public class ConfigActivity extends AppCompatActivity {
     private SwitchCompat hookMacSwitch;
     private SwitchCompat hookGsfSwitch;
     private SwitchCompat hookCarrierSwitch;
+    private TextView tvAndroidId;
+    private TextView tvAdId;
+    private TextView tvImei;
+    private TextView tvBuild;
+    private TextView tvMac;
+    private TextView tvGsf;
+    private TextView tvCarrier;
+
+    private static final int COLOR_WHITE = 0xFFFFFFFF;
+    private static final int COLOR_BLUE = 0xFF0A84FF;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -63,13 +73,13 @@ public class ConfigActivity extends AppCompatActivity {
         TextView tvScopeTitle = findViewById(R.id.tv_scope_title);
         TextView tvScopeContent = findViewById(R.id.tv_scope_content);
         TextView tvSpoofTitle = findViewById(R.id.tv_spoof_title);
-        TextView tvAndroidId = findViewById(R.id.tv_android_id);
-        TextView tvAdId = findViewById(R.id.tv_ad_id);
-        TextView tvImei = findViewById(R.id.tv_imei);
-        TextView tvBuild = findViewById(R.id.tv_build);
-        TextView tvMac = findViewById(R.id.tv_mac);
-        TextView tvGsf = findViewById(R.id.tv_gsf);
-        TextView tvCarrier = findViewById(R.id.tv_carrier);
+        tvAndroidId = findViewById(R.id.tv_android_id);
+        tvAdId = findViewById(R.id.tv_ad_id);
+        tvImei = findViewById(R.id.tv_imei);
+        tvBuild = findViewById(R.id.tv_build);
+        tvMac = findViewById(R.id.tv_mac);
+        tvGsf = findViewById(R.id.tv_gsf);
+        tvCarrier = findViewById(R.id.tv_carrier);
         TextView tvFooter = findViewById(R.id.tv_footer);
 
         if (isZh) {
@@ -122,35 +132,64 @@ public class ConfigActivity extends AppCompatActivity {
 
         hookAndroidIdSwitch.setOnCheckedChangeListener((v, checked) -> {
             try { Config.setHookAndroidId(this, checked); } catch (Throwable ignored) {}
+            updateSwitchTextColor(tvAndroidId, checked);
         });
         hookAdIdSwitch.setOnCheckedChangeListener((v, checked) -> {
             try { Config.setHookAdId(this, checked); } catch (Throwable ignored) {}
+            updateSwitchTextColor(tvAdId, checked);
         });
         hookImeiSwitch.setOnCheckedChangeListener((v, checked) -> {
             try { Config.setHookImei(this, checked); } catch (Throwable ignored) {}
+            updateSwitchTextColor(tvImei, checked);
         });
         hookBuildSwitch.setOnCheckedChangeListener((v, checked) -> {
             try { Config.setHookBuild(this, checked); } catch (Throwable ignored) {}
+            updateSwitchTextColor(tvBuild, checked);
         });
         hookMacSwitch.setOnCheckedChangeListener((v, checked) -> {
             try { Config.setHookMac(this, checked); } catch (Throwable ignored) {}
+            updateSwitchTextColor(tvMac, checked);
         });
         hookGsfSwitch.setOnCheckedChangeListener((v, checked) -> {
             try { Config.setHookGsf(this, checked); } catch (Throwable ignored) {}
+            updateSwitchTextColor(tvGsf, checked);
         });
         hookCarrierSwitch.setOnCheckedChangeListener((v, checked) -> {
             try { Config.setHookCarrier(this, checked); } catch (Throwable ignored) {}
+            updateSwitchTextColor(tvCarrier, checked);
         });
     }
 
+    /** 开关选中时文字变蓝，未选中时白色 */
+    private void updateSwitchTextColor(TextView tv, boolean checked) {
+        if (tv != null) {
+            tv.setTextColor(checked ? COLOR_BLUE : COLOR_WHITE);
+        }
+    }
+
     private void loadConfig() {
-        try { hookAndroidIdSwitch.setChecked(Config.isHookAndroidId(this)); } catch (Throwable ignored) {}
-        try { hookAdIdSwitch.setChecked(Config.isHookAdId(this)); } catch (Throwable ignored) {}
-        try { hookImeiSwitch.setChecked(Config.isHookImei(this)); } catch (Throwable ignored) {}
-        try { hookBuildSwitch.setChecked(Config.isHookBuild(this)); } catch (Throwable ignored) {}
-        try { hookMacSwitch.setChecked(Config.isHookMac(this)); } catch (Throwable ignored) {}
-        try { hookGsfSwitch.setChecked(Config.isHookGsf(this)); } catch (Throwable ignored) {}
-        try { hookCarrierSwitch.setChecked(Config.isHookCarrier(this)); } catch (Throwable ignored) {}
+        boolean androidId = false, adId = false, imei = false, build = false, mac = false, gsf = false, carrier = false;
+        try { androidId = Config.isHookAndroidId(this); } catch (Throwable ignored) {}
+        try { adId = Config.isHookAdId(this); } catch (Throwable ignored) {}
+        try { imei = Config.isHookImei(this); } catch (Throwable ignored) {}
+        try { build = Config.isHookBuild(this); } catch (Throwable ignored) {}
+        try { mac = Config.isHookMac(this); } catch (Throwable ignored) {}
+        try { gsf = Config.isHookGsf(this); } catch (Throwable ignored) {}
+        try { carrier = Config.isHookCarrier(this); } catch (Throwable ignored) {}
+        hookAndroidIdSwitch.setChecked(androidId);
+        hookAdIdSwitch.setChecked(adId);
+        hookImeiSwitch.setChecked(imei);
+        hookBuildSwitch.setChecked(build);
+        hookMacSwitch.setChecked(mac);
+        hookGsfSwitch.setChecked(gsf);
+        hookCarrierSwitch.setChecked(carrier);
+        updateSwitchTextColor(tvAndroidId, androidId);
+        updateSwitchTextColor(tvAdId, adId);
+        updateSwitchTextColor(tvImei, imei);
+        updateSwitchTextColor(tvBuild, build);
+        updateSwitchTextColor(tvMac, mac);
+        updateSwitchTextColor(tvGsf, gsf);
+        updateSwitchTextColor(tvCarrier, carrier);
     }
 
     @Override
