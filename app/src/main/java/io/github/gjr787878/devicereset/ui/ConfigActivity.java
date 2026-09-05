@@ -11,7 +11,6 @@ import android.widget.Toast;
 
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.appcompat.widget.SwitchCompat;
 
 import io.github.gjr787878.devicereset.Config;
 import io.github.gjr787878.devicereset.R;
@@ -24,13 +23,13 @@ public class ConfigActivity extends AppCompatActivity {
     private static final String LANG_RU = "ru";
 
     private String currentLang;
-    private SwitchCompat hookAndroidIdSwitch;
-    private SwitchCompat hookAdIdSwitch;
-    private SwitchCompat hookImeiSwitch;
-    private SwitchCompat hookBuildSwitch;
-    private SwitchCompat hookMacSwitch;
-    private SwitchCompat hookGsfSwitch;
-    private SwitchCompat hookCarrierSwitch;
+    private LinearLayout btnAndroidId;
+    private LinearLayout btnAdId;
+    private LinearLayout btnImei;
+    private LinearLayout btnBuild;
+    private LinearLayout btnMac;
+    private LinearLayout btnGsf;
+    private LinearLayout btnCarrier;
     private TextView tvAndroidId;
     private TextView tvAdId;
     private TextView tvImei;
@@ -114,7 +113,7 @@ public class ConfigActivity extends AppCompatActivity {
             tvAdId.setText("Подмена рекламного ID (AAID)");
             tvImei.setText("Подмена IMEI/MEID");
             tvBuild.setText("Подмена модели устройства (Build)");
-            tvMac.setText("Подмена MAC-адреса");
+            tvMac.setText("Подмена MAC-адрес");
             tvGsf.setText("Подмена GSF ID");
             tvCarrier.setText("Подмена информации об операторе");
             tvFooter.setText("Ручной сброс идентичности из меню в правом верхнем углу.\nУстранение неполадок: LSPosed → Журналы → Поиск «DeviceReset»");
@@ -122,74 +121,86 @@ public class ConfigActivity extends AppCompatActivity {
     }
 
     private void initViews() {
-        hookAndroidIdSwitch = findViewById(R.id.switch_hook_android_id);
-        hookAdIdSwitch = findViewById(R.id.switch_hook_ad_id);
-        hookImeiSwitch = findViewById(R.id.switch_hook_imei);
-        hookBuildSwitch = findViewById(R.id.switch_hook_build);
-        hookMacSwitch = findViewById(R.id.switch_hook_mac);
-        hookGsfSwitch = findViewById(R.id.switch_hook_gsf);
-        hookCarrierSwitch = findViewById(R.id.switch_hook_carrier);
+        btnAndroidId = findViewById(R.id.btn_android_id);
+        btnAdId = findViewById(R.id.btn_ad_id);
+        btnImei = findViewById(R.id.btn_imei);
+        btnBuild = findViewById(R.id.btn_build);
+        btnMac = findViewById(R.id.btn_mac);
+        btnGsf = findViewById(R.id.btn_gsf);
+        btnCarrier = findViewById(R.id.btn_carrier);
 
-        hookAndroidIdSwitch.setOnCheckedChangeListener((v, checked) -> {
-            try { Config.setHookAndroidId(this, checked); } catch (Throwable ignored) {}
-            updateSwitchTextColor(tvAndroidId, checked);
-        });
-        hookAdIdSwitch.setOnCheckedChangeListener((v, checked) -> {
-            try { Config.setHookAdId(this, checked); } catch (Throwable ignored) {}
-            updateSwitchTextColor(tvAdId, checked);
-        });
-        hookImeiSwitch.setOnCheckedChangeListener((v, checked) -> {
-            try { Config.setHookImei(this, checked); } catch (Throwable ignored) {}
-            updateSwitchTextColor(tvImei, checked);
-        });
-        hookBuildSwitch.setOnCheckedChangeListener((v, checked) -> {
-            try { Config.setHookBuild(this, checked); } catch (Throwable ignored) {}
-            updateSwitchTextColor(tvBuild, checked);
-        });
-        hookMacSwitch.setOnCheckedChangeListener((v, checked) -> {
-            try { Config.setHookMac(this, checked); } catch (Throwable ignored) {}
-            updateSwitchTextColor(tvMac, checked);
-        });
-        hookGsfSwitch.setOnCheckedChangeListener((v, checked) -> {
-            try { Config.setHookGsf(this, checked); } catch (Throwable ignored) {}
-            updateSwitchTextColor(tvGsf, checked);
-        });
-        hookCarrierSwitch.setOnCheckedChangeListener((v, checked) -> {
-            try { Config.setHookCarrier(this, checked); } catch (Throwable ignored) {}
-            updateSwitchTextColor(tvCarrier, checked);
-        });
+        btnAndroidId.setOnClickListener(v -> toggleHook(0));
+        btnAdId.setOnClickListener(v -> toggleHook(1));
+        btnImei.setOnClickListener(v -> toggleHook(2));
+        btnBuild.setOnClickListener(v -> toggleHook(3));
+        btnMac.setOnClickListener(v -> toggleHook(4));
+        btnGsf.setOnClickListener(v -> toggleHook(5));
+        btnCarrier.setOnClickListener(v -> toggleHook(6));
     }
 
-    /** 开关选中时文字变蓝，未选中时白色 */
-    private void updateSwitchTextColor(TextView tv, boolean checked) {
+    /** 切换某个伪装选项的状态，index: 0=AndroidId 1=AdId 2=Imei 3=Build 4=Mac 5=Gsf 6=Carrier */
+    private void toggleHook(int index) {
+        boolean current = readHookState(index);
+        boolean next = !current;
+        writeHookState(index, next);
+        TextView tv = getHookTextView(index);
+        updateButtonTextColor(tv, next);
+    }
+
+    private boolean readHookState(int index) {
+        try {
+            switch (index) {
+                case 0: return Config.isHookAndroidId(this);
+                case 1: return Config.isHookAdId(this);
+                case 2: return Config.isHookImei(this);
+                case 3: return Config.isHookBuild(this);
+                case 4: return Config.isHookMac(this);
+                case 5: return Config.isHookGsf(this);
+                case 6: return Config.isHookCarrier(this);
+            }
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    private void writeHookState(int index, boolean value) {
+        try {
+            switch (index) {
+                case 0: Config.setHookAndroidId(this, value); break;
+                case 1: Config.setHookAdId(this, value); break;
+                case 2: Config.setHookImei(this, value); break;
+                case 3: Config.setHookBuild(this, value); break;
+                case 4: Config.setHookMac(this, value); break;
+                case 5: Config.setHookGsf(this, value); break;
+                case 6: Config.setHookCarrier(this, value); break;
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private TextView getHookTextView(int index) {
+        switch (index) {
+            case 0: return tvAndroidId;
+            case 1: return tvAdId;
+            case 2: return tvImei;
+            case 3: return tvBuild;
+            case 4: return tvMac;
+            case 5: return tvGsf;
+            case 6: return tvCarrier;
+        }
+        return null;
+    }
+
+    /** 选中时文字变蓝，未选中时白色 */
+    private void updateButtonTextColor(TextView tv, boolean checked) {
         if (tv != null) {
             tv.setTextColor(checked ? COLOR_BLUE : COLOR_WHITE);
         }
     }
 
     private void loadConfig() {
-        boolean androidId = false, adId = false, imei = false, build = false, mac = false, gsf = false, carrier = false;
-        try { androidId = Config.isHookAndroidId(this); } catch (Throwable ignored) {}
-        try { adId = Config.isHookAdId(this); } catch (Throwable ignored) {}
-        try { imei = Config.isHookImei(this); } catch (Throwable ignored) {}
-        try { build = Config.isHookBuild(this); } catch (Throwable ignored) {}
-        try { mac = Config.isHookMac(this); } catch (Throwable ignored) {}
-        try { gsf = Config.isHookGsf(this); } catch (Throwable ignored) {}
-        try { carrier = Config.isHookCarrier(this); } catch (Throwable ignored) {}
-        hookAndroidIdSwitch.setChecked(androidId);
-        hookAdIdSwitch.setChecked(adId);
-        hookImeiSwitch.setChecked(imei);
-        hookBuildSwitch.setChecked(build);
-        hookMacSwitch.setChecked(mac);
-        hookGsfSwitch.setChecked(gsf);
-        hookCarrierSwitch.setChecked(carrier);
-        updateSwitchTextColor(tvAndroidId, androidId);
-        updateSwitchTextColor(tvAdId, adId);
-        updateSwitchTextColor(tvImei, imei);
-        updateSwitchTextColor(tvBuild, build);
-        updateSwitchTextColor(tvMac, mac);
-        updateSwitchTextColor(tvGsf, gsf);
-        updateSwitchTextColor(tvCarrier, carrier);
+        for (int i = 0; i < 7; i++) {
+            boolean state = readHookState(i);
+            updateButtonTextColor(getHookTextView(i), state);
+        }
     }
 
     @Override

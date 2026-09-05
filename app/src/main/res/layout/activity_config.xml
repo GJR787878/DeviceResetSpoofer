@@ -43,165 +43,158 @@
             android:textColor="#FFFFFF"
             android:layout_marginBottom="12dp"/>
 
-        <!-- Android ID开关：玻璃卡片 -->
+        <!-- Android ID：胶囊按钮，点击切换，文字居中 -->
         <LinearLayout
+            android:id="@+id/btn_android_id"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:padding="12dp"
-            android:background="@drawable/bg_card_glass"
-            android:layout_marginBottom="8dp">
+            android:gravity="center"
+            android:padding="14dp"
+            android:background="@drawable/bg_pill_glass"
+            android:clickable="true"
+            android:focusable="true"
+            android:layout_marginBottom="10dp">
             <TextView
                 android:id="@+id/tv_android_id"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="伪装 Android ID"
-                android:textSize="14sp"
-                android:textColor="#FFFFFF"/>
-            <androidx.appcompat.widget.SwitchCompat
-                android:id="@+id/switch_hook_android_id"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"/>
+                android:layout_height="wrap_content"
+                android:text="伪装 Android ID"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF"/>
         </LinearLayout>
 
-        <!-- 广告ID开关 -->
+        <!-- 广告ID -->
         <LinearLayout
+            android:id="@+id/btn_ad_id"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:padding="12dp"
-            android:background="@drawable/bg_card_glass"
-            android:layout_marginBottom="8dp">
+            android:gravity="center"
+            android:padding="14dp"
+            android:background="@drawable/bg_pill_glass"
+            android:clickable="true"
+            android:focusable="true"
+            android:layout_marginBottom="10dp">
             <TextView
                 android:id="@+id/tv_ad_id"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="伪装 广告ID (AAID)"
-                android:textSize="14sp"
-                android:textColor="#FFFFFF"/>
-            <androidx.appcompat.widget.SwitchCompat
-                android:id="@+id/switch_hook_ad_id"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"/>
+                android:layout_height="wrap_content"
+                android:text="伪装 广告ID (AAID)"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF"/>
         </LinearLayout>
 
-        <!-- IMEI开关 -->
+        <!-- IMEI -->
         <LinearLayout
+            android:id="@+id/btn_imei"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:padding="12dp"
-            android:background="@drawable/bg_card_glass"
-            android:layout_marginBottom="8dp">
+            android:gravity="center"
+            android:padding="14dp"
+            android:background="@drawable/bg_pill_glass"
+            android:clickable="true"
+            android:focusable="true"
+            android:layout_marginBottom="10dp">
             <TextView
                 android:id="@+id/tv_imei"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="伪装 IMEI/MEID"
-                android:textSize="14sp"
-                android:textColor="#FFFFFF"/>
-            <androidx.appcompat.widget.SwitchCompat
-                android:id="@+id/switch_hook_imei"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"/>
+                android:layout_height="wrap_content"
+                android:text="伪装 IMEI/MEID"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF"/>
         </LinearLayout>
 
-        <!-- Build开关 -->
+        <!-- Build -->
         <LinearLayout
+            android:id="@+id/btn_build"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:padding="12dp"
-            android:background="@drawable/bg_card_glass"
-            android:layout_marginBottom="8dp">
+            android:gravity="center"
+            android:padding="14dp"
+            android:background="@drawable/bg_pill_glass"
+            android:clickable="true"
+            android:focusable="true"
+            android:layout_marginBottom="10dp">
             <TextView
                 android:id="@+id/tv_build"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="伪装 设备型号 (Build)"
-                android:textSize="14sp"
-                android:textColor="#FFFFFF"/>
-            <androidx.appcompat.widget.SwitchCompat
-                android:id="@+id/switch_hook_build"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"/>
+                android:layout_height="wrap_content"
+                android:text="伪装 设备型号 (Build)"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF"/>
         </LinearLayout>
 
-        <!-- MAC开关 -->
+        <!-- MAC -->
         <LinearLayout
+            android:id="@+id/btn_mac"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:padding="12dp"
-            android:background="@drawable/bg_card_glass"
-            android:layout_marginBottom="8dp">
+            android:gravity="center"
+            android:padding="14dp"
+            android:background="@drawable/bg_pill_glass"
+            android:clickable="true"
+            android:focusable="true"
+            android:layout_marginBottom="10dp">
             <TextView
                 android:id="@+id/tv_mac"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="伪装 MAC地址"
-                android:textSize="14sp"
-                android:textColor="#FFFFFF"/>
-            <androidx.appcompat.widget.SwitchCompat
-                android:id="@+id/switch_hook_mac"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"/>
+                android:layout_height="wrap_content"
+                android:text="伪装 MAC地址"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF"/>
         </LinearLayout>
 
-        <!-- GSF开关 -->
+        <!-- GSF -->
         <LinearLayout
+            android:id="@+id/btn_gsf"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:padding="12dp"
-            android:background="@drawable/bg_card_glass"
-            android:layout_marginBottom="8dp">
+            android:gravity="center"
+            android:padding="14dp"
+            android:background="@drawable/bg_pill_glass"
+            android:clickable="true"
+            android:focusable="true"
+            android:layout_marginBottom="10dp">
             <TextView
                 android:id="@+id/tv_gsf"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="伪装 GSF ID"
-                android:textSize="14sp"
-                android:textColor="#FFFFFF"/>
-            <androidx.appcompat.widget.SwitchCompat
-                android:id="@+id/switch_hook_gsf"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"/>
+                android:layout_height="wrap_content"
+                android:text="伪装 GSF ID"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF"/>
         </LinearLayout>
 
-        <!-- 运营商开关 -->
+        <!-- 运营商 -->
         <LinearLayout
+            android:id="@+id/btn_carrier"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:padding="12dp"
-            android:background="@drawable/bg_card_glass"
+            android:gravity="center"
+            android:padding="14dp"
+            android:background="@drawable/bg_pill_glass"
+            android:clickable="true"
+            android:focusable="true"
             android:layout_marginBottom="20dp">
             <TextView
                 android:id="@+id/tv_carrier"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="伪装 运营商信息"
-                android:textSize="14sp"
-                android:textColor="#FFFFFF"/>
-            <androidx.appcompat.widget.SwitchCompat
-                android:id="@+id/switch_hook_carrier"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"/>
+                android:layout_height="wrap_content"
+                android:text="伪装 运营商信息"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF"/>
         </LinearLayout>
 
         <!-- 底部提示：黑底白字，无背景 -->
