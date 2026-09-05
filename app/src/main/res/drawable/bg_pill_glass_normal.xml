@@ -1,28 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 玻璃卡片 - 五层叠加（渐变描边+深色填充+顶部高光+底部阴影），12dp圆角 -->
+<!-- 玻璃胶囊按钮 - 默认态：五层叠加（渐变描边+深色填充+顶部高光+底部阴影） -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- 渐变描边 -->
+    <!-- 第1层：渐变描边（上亮下暗，模拟玻璃边缘折射） -->
     <item>
         <shape android:shape="rectangle">
             <gradient
                 android:angle="270"
-                android:startColor="#80FFFFFF"
-                android:endColor="#26FFFFFF" />
-            <corners android:radius="12dp" />
+                android:startColor="#99FFFFFF"
+                android:endColor="#33FFFFFF" />
+            <corners android:radius="24dp" />
         </shape>
     </item>
-    <!-- 半透明深色填充 -->
+    <!-- 第2层：半透明深色填充（内缩1dp露出描边） -->
     <item
         android:left="1dp"
         android:top="1dp"
         android:right="1dp"
         android:bottom="1dp">
         <shape android:shape="rectangle">
-            <solid android:color="#261C1C1E" />
-            <corners android:radius="11dp" />
+            <solid android:color="#331C1C1E" />
+            <corners android:radius="23dp" />
         </shape>
     </item>
-    <!-- 顶部高光 -->
+    <!-- 第3层：顶部白色高光渐变 -->
     <item
         android:left="1dp"
         android:top="1dp"
@@ -31,12 +31,12 @@
         <shape android:shape="rectangle">
             <gradient
                 android:angle="270"
-                android:startColor="#33FFFFFF"
+                android:startColor="#4DFFFFFF"
                 android:endColor="#00FFFFFF" />
-            <corners android:radius="11dp" />
+            <corners android:radius="23dp" />
         </shape>
     </item>
-    <!-- 底部内阴影 -->
+    <!-- 第4层：底部黑色内阴影 -->
     <item
         android:left="1dp"
         android:top="1dp"
@@ -46,8 +46,8 @@
             <gradient
                 android:angle="270"
                 android:startColor="#00000000"
-                android:endColor="#33000000" />
-            <corners android:radius="11dp" />
+                android:endColor="#40000000" />
+            <corners android:radius="23dp" />
         </shape>
     </item>
 </layer-list>

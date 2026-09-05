@@ -51,7 +51,6 @@
                 android:textStyle="bold"
                 android:textColor="#FFFFFF"
                 android:background="@drawable/bg_pill_glass"
-                android:alpha="0.85"
                 android:padding="12dp"
                 android:layout_marginEnd="6dp"/>
 
@@ -65,7 +64,6 @@
                 android:textStyle="bold"
                 android:textColor="#FFFFFF"
                 android:background="@drawable/bg_pill_glass"
-                android:alpha="0.85"
                 android:padding="12dp"
                 android:layout_marginStart="6dp"/>
         </LinearLayout>
@@ -89,7 +87,6 @@
             android:textColor="#CCCCDD"
             android:lineSpacingExtra="4dp"
             android:background="@drawable/bg_card_glass"
-            android:alpha="0.9"
             android:padding="14dp"
             android:layout_marginBottom="16dp"/>
 
@@ -112,7 +109,6 @@
             android:textColor="#CCCCDD"
             android:lineSpacingExtra="4dp"
             android:background="@drawable/bg_card_glass"
-            android:alpha="0.9"
             android:padding="14dp"
             android:layout_marginBottom="16dp"/>
 
@@ -135,7 +131,6 @@
             android:textColor="#CCCCDD"
             android:lineSpacingExtra="4dp"
             android:background="@drawable/bg_card_glass"
-            android:alpha="0.9"
             android:padding="14dp"
             android:layout_marginBottom="16dp"/>
 
@@ -158,7 +153,6 @@
             android:textColor="#CCCCDD"
             android:lineSpacingExtra="4dp"
             android:background="@drawable/bg_card_warning"
-            android:alpha="0.9"
             android:padding="14dp"
             android:layout_marginBottom="20dp"/>
 
