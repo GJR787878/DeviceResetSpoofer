@@ -2,6 +2,7 @@ package io.github.gjr787878.devicereset.ui;
 
 import android.content.SharedPreferences;
 import android.os.Bundle;
+import android.util.TypedValue;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.widget.EditText;
@@ -13,6 +14,7 @@ import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 
 import io.github.gjr787878.devicereset.Config;
+import io.github.gjr787878.devicereset.GlassButtonDrawable;
 import io.github.gjr787878.devicereset.R;
 import io.github.gjr787878.devicereset.xposed.SentinelDetector;
 
@@ -30,6 +32,13 @@ public class ConfigActivity extends AppCompatActivity {
     private LinearLayout btnMac;
     private LinearLayout btnGsf;
     private LinearLayout btnCarrier;
+    private GlassButtonDrawable glassAndroidId;
+    private GlassButtonDrawable glassAdId;
+    private GlassButtonDrawable glassImei;
+    private GlassButtonDrawable glassBuild;
+    private GlassButtonDrawable glassMac;
+    private GlassButtonDrawable glassGsf;
+    private GlassButtonDrawable glassCarrier;
     private TextView tvAndroidId;
     private TextView tvAdId;
     private TextView tvImei;
@@ -129,6 +138,23 @@ public class ConfigActivity extends AppCompatActivity {
         btnGsf = findViewById(R.id.btn_gsf);
         btnCarrier = findViewById(R.id.btn_carrier);
 
+        float radiusPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 24, getResources().getDisplayMetrics());
+        float borderPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 1, getResources().getDisplayMetrics());
+        glassAndroidId = new GlassButtonDrawable(radiusPx, borderPx, false);
+        glassAdId = new GlassButtonDrawable(radiusPx, borderPx, false);
+        glassImei = new GlassButtonDrawable(radiusPx, borderPx, false);
+        glassBuild = new GlassButtonDrawable(radiusPx, borderPx, false);
+        glassMac = new GlassButtonDrawable(radiusPx, borderPx, false);
+        glassGsf = new GlassButtonDrawable(radiusPx, borderPx, false);
+        glassCarrier = new GlassButtonDrawable(radiusPx, borderPx, false);
+        btnAndroidId.setBackground(glassAndroidId);
+        btnAdId.setBackground(glassAdId);
+        btnImei.setBackground(glassImei);
+        btnBuild.setBackground(glassBuild);
+        btnMac.setBackground(glassMac);
+        btnGsf.setBackground(glassGsf);
+        btnCarrier.setBackground(glassCarrier);
+
         btnAndroidId.setOnClickListener(v -> toggleHook(0));
         btnAdId.setOnClickListener(v -> toggleHook(1));
         btnImei.setOnClickListener(v -> toggleHook(2));
@@ -138,6 +164,19 @@ public class ConfigActivity extends AppCompatActivity {
         btnCarrier.setOnClickListener(v -> toggleHook(6));
     }
 
+    private GlassButtonDrawable getGlassDrawable(int index) {
+        switch (index) {
+            case 0: return glassAndroidId;
+            case 1: return glassAdId;
+            case 2: return glassImei;
+            case 3: return glassBuild;
+            case 4: return glassMac;
+            case 5: return glassGsf;
+            case 6: return glassCarrier;
+        }
+        return null;
+    }
+
     /** 切换某个伪装选项的状态，index: 0=AndroidId 1=AdId 2=Imei 3=Build 4=Mac 5=Gsf 6=Carrier */
     private void toggleHook(int index) {
         boolean current = readHookState(index);
@@ -145,6 +184,8 @@ public class ConfigActivity extends AppCompatActivity {
         writeHookState(index, next);
         TextView tv = getHookTextView(index);
         updateButtonTextColor(tv, next);
+        GlassButtonDrawable glass = getGlassDrawable(index);
+        if (glass != null) glass.setGlassSelected(next);
     }
 
     private boolean readHookState(int index) {
@@ -200,6 +241,8 @@ public class ConfigActivity extends AppCompatActivity {
         for (int i = 0; i < 7; i++) {
             boolean state = readHookState(i);
             updateButtonTextColor(getHookTextView(i), state);
+            GlassButtonDrawable glass = getGlassDrawable(i);
+            if (glass != null) glass.setGlassSelected(state);
         }
     }
 

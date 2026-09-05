@@ -3,11 +3,13 @@ package io.github.gjr787878.devicereset.ui;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Bundle;
+import android.util.TypedValue;
 import android.widget.Button;
 import android.widget.TextView;
 
 import androidx.appcompat.app.AppCompatActivity;
 
+import io.github.gjr787878.devicereset.GlassButtonDrawable;
 import io.github.gjr787878.devicereset.R;
 
 public class MainActivity extends AppCompatActivity {
@@ -26,14 +28,20 @@ public class MainActivity extends AppCompatActivity {
         SharedPreferences prefs = getSharedPreferences("devicereset_ui", MODE_PRIVATE);
         currentLang = prefs.getString(PREFS_LANG, LANG_ZH);
 
+        // 玻璃拟态按钮
+        float radiusPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 24, getResources().getDisplayMetrics());
+        float borderPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 1, getResources().getDisplayMetrics());
+        Button btnConfig = findViewById(R.id.btn_open_config);
+        Button btnLang = findViewById(R.id.btn_switch_lang);
+        btnConfig.setBackground(new GlassButtonDrawable(radiusPx, borderPx, false));
+        btnLang.setBackground(new GlassButtonDrawable(radiusPx, borderPx, false));
+
         updateUI();
 
-        Button btnConfig = findViewById(R.id.btn_open_config);
         btnConfig.setOnClickListener(v ->
                 startActivity(new Intent(this, ConfigActivity.class)));
 
         // 三语循环切换：中 -> 英 -> 俄 -> 中
-        Button btnLang = findViewById(R.id.btn_switch_lang);
         btnLang.setOnClickListener(v -> {
             if (LANG_ZH.equals(currentLang)) {
                 currentLang = LANG_EN;

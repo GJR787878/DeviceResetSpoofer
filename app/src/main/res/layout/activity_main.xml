@@ -3,7 +3,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:fillViewport="true"
-    android:background="#1A1A2E">
+    android:background="#000000">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -19,7 +19,7 @@
             android:text="DeviceResetSpoofer"
             android:textSize="24sp"
             android:textStyle="bold"
-            android:textColor="#E0E0FF"
+            android:textColor="#FFFFFF"
             android:gravity="center"
             android:layout_marginTop="8dp"/>
 
@@ -29,17 +29,17 @@
             android:layout_height="wrap_content"
             android:text="清除应用数据后自动生成全新设备识别码"
             android:textSize="13sp"
-            android:textColor="#9999BB"
+            android:textColor="#999999"
             android:gravity="center"
             android:layout_marginTop="4dp"
             android:layout_marginBottom="20dp"/>
 
-        <!-- 两个按钮同一行：运行日志 + 中英文切换 -->
+        <!-- 两个按钮同一行：运行日志 + 语言切换 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:layout_marginBottom="20dp">
+            android:layout_marginBottom="24dp">
 
             <Button
                 android:id="@+id/btn_open_config"
@@ -50,7 +50,6 @@
                 android:textSize="14sp"
                 android:textStyle="bold"
                 android:textColor="#FFFFFF"
-                android:background="@drawable/bg_pill_glass"
                 android:padding="12dp"
                 android:layout_marginEnd="6dp"/>
 
@@ -59,11 +58,10 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="🌐 EN / 中文"
+                android:text="🌐 中/EN/RU"
                 android:textSize="14sp"
                 android:textStyle="bold"
                 android:textColor="#FFFFFF"
-                android:background="@drawable/bg_pill_glass"
                 android:padding="12dp"
                 android:layout_marginStart="6dp"/>
         </LinearLayout>
@@ -76,7 +74,7 @@
             android:text="📖 使用方法"
             android:textSize="16sp"
             android:textStyle="bold"
-            android:textColor="#B388FF"
+            android:textColor="#FFFFFF"
             android:layout_marginBottom="8dp"/>
 
         <TextView
@@ -84,11 +82,10 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:textSize="13sp"
-            android:textColor="#CCCCDD"
+            android:textColor="#CCCCCC"
             android:lineSpacingExtra="4dp"
-            android:background="@drawable/bg_card_glass"
-            android:padding="14dp"
-            android:layout_marginBottom="16dp"/>
+            android:padding="4dp"
+            android:layout_marginBottom="20dp"/>
 
         <!-- 工作原理 -->
         <TextView
@@ -98,7 +95,7 @@
             android:text="🔧 工作原理"
             android:textSize="16sp"
             android:textStyle="bold"
-            android:textColor="#B388FF"
+            android:textColor="#FFFFFF"
             android:layout_marginBottom="8dp"/>
 
         <TextView
@@ -106,11 +103,10 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:textSize="13sp"
-            android:textColor="#CCCCDD"
+            android:textColor="#CCCCCC"
             android:lineSpacingExtra="4dp"
-            android:background="@drawable/bg_card_glass"
-            android:padding="14dp"
-            android:layout_marginBottom="16dp"/>
+            android:padding="4dp"
+            android:layout_marginBottom="20dp"/>
 
         <!-- 伪装内容 -->
         <TextView
@@ -120,7 +116,7 @@
             android:text="🎭 伪装的识别码"
             android:textSize="16sp"
             android:textStyle="bold"
-            android:textColor="#B388FF"
+            android:textColor="#FFFFFF"
             android:layout_marginBottom="8dp"/>
 
         <TextView
@@ -128,11 +124,10 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:textSize="13sp"
-            android:textColor="#CCCCDD"
+            android:textColor="#CCCCCC"
             android:lineSpacingExtra="4dp"
-            android:background="@drawable/bg_card_glass"
-            android:padding="14dp"
-            android:layout_marginBottom="16dp"/>
+            android:padding="4dp"
+            android:layout_marginBottom="20dp"/>
 
         <!-- 注意事项 -->
         <TextView
@@ -150,10 +145,9 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:textSize="13sp"
-            android:textColor="#CCCCDD"
+            android:textColor="#CCCCCC"
             android:lineSpacingExtra="4dp"
-            android:background="@drawable/bg_card_warning"
-            android:padding="14dp"
+            android:padding="4dp"
             android:layout_marginBottom="20dp"/>
 
     </LinearLayout>
