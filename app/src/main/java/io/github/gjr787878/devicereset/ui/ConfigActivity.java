@@ -16,6 +16,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import io.github.gjr787878.devicereset.Config;
 import io.github.gjr787878.devicereset.GlassButtonDrawable;
 import io.github.gjr787878.devicereset.R;
+import io.github.gjr787878.devicereset.xposed.Identity;
 import io.github.gjr787878.devicereset.xposed.SentinelDetector;
 
 public class ConfigActivity extends AppCompatActivity {
@@ -162,6 +163,12 @@ public class ConfigActivity extends AppCompatActivity {
         btnMac.setOnClickListener(v -> toggleHook(4));
         btnGsf.setOnClickListener(v -> toggleHook(5));
         btnCarrier.setOnClickListener(v -> toggleHook(6));
+
+        // 显示当前伪装值按钮
+        LinearLayout btnShowIdentity = findViewById(R.id.btn_show_identity);
+        GlassButtonDrawable glassShowIdentity = new GlassButtonDrawable(radiusPx, borderPx, false);
+        btnShowIdentity.setBackground(glassShowIdentity);
+        btnShowIdentity.setOnClickListener(v -> showIdentityInputDialog());
     }
 
     private GlassButtonDrawable getGlassDrawable(int index) {
@@ -273,6 +280,144 @@ public class ConfigActivity extends AppCompatActivity {
             return true;
         }
         return super.onOptionsItemSelected(item);
+    }
+
+    // ==================== 显示当前伪装值 ====================
+    private void showIdentityInputDialog() {
+        boolean isZh = LANG_ZH.equals(currentLang);
+        boolean isEn = LANG_EN.equals(currentLang);
+        final EditText input = new EditText(this);
+        if (isZh) {
+            input.setHint("输入目标应用包名，如 com.example.app");
+        } else if (isEn) {
+            input.setHint("Enter target app package name, e.g. com.example.app");
+        } else {
+            input.setHint("Введите имя пакета целевого приложения");
+        }
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(48, 24, 48, 24);
+        layout.addView(input);
+
+        String title, message, positive, negative, emptyMsg;
+        if (isZh) {
+            title = "显示当前伪装值";
+            message = "输入目标应用的包名，读取该应用当前使用的伪装设备信息。需要 Root 权限。";
+            positive = "读取";
+            negative = "取消";
+            emptyMsg = "请输入包名";
+        } else if (isEn) {
+            title = "Show Current Spoofed Values";
+            message = "Enter the target app's package name to read its current spoofed device identity. Requires Root.";
+            positive = "Read";
+            negative = "Cancel";
+            emptyMsg = "Please enter package name";
+        } else {
+            title = "Показать текущие подменные значения";
+            message = "Введите имя пакета целевого приложения для чтения его текущей подменённой идентификации. Требуется Root.";
+            positive = "Читать";
+            negative = "Отмена";
+            emptyMsg = "Введите имя пакета";
+        }
+
+        final String fEmptyMsg = emptyMsg;
+        new AlertDialog.Builder(this)
+                .setTitle(title)
+                .setMessage(message)
+                .setView(layout)
+                .setPositiveButton(positive, (dialog, which) -> {
+                    String pkg = input.getText().toString().trim();
+                    if (pkg.isEmpty()) {
+                        Toast.makeText(this, fEmptyMsg, Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    String json = readIdentityFile(pkg);
+                    if (json == null) {
+                        String failMsg = isZh ? "读取失败，请确保已授予 Root 权限且该应用已运行过"
+                                : isEn ? "Read failed. Ensure Root access and the app has been launched at least once."
+                                : "Ошибка чтения. Проверьте Root и что приложение запускалось хотя бы раз.";
+                        Toast.makeText(this, failMsg, Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    showIdentityDialog(pkg, json);
+                })
+                .setNegativeButton(negative, null)
+                .show();
+    }
+
+    /** 通过 Root 读取目标应用的哨兵文件 */
+    private String readIdentityFile(String packageName) {
+        try {
+            String path = "/data/data/" + packageName + "/files/.identity_sentinel";
+            Process su = Runtime.getRuntime().exec("su");
+            java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
+            os.writeBytes("cat '" + path + "'\n");
+            os.writeBytes("exit\n");
+            os.flush();
+            java.io.BufferedReader reader = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(su.getInputStream()));
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                sb.append(line);
+            }
+            reader.close();
+            int result = su.waitFor();
+            String output = sb.toString().trim();
+            if (result == 0 && !output.isEmpty() && output.startsWith("{")) {
+                return output;
+            }
+            return null;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** 解析并显示伪装值 */
+    private void showIdentityDialog(String packageName, String json) {
+        Identity id = Identity.fromJson(json);
+        if (id == null) {
+            Toast.makeText(this, "解析失败", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        boolean isZh = LANG_ZH.equals(currentLang);
+        StringBuilder sb = new StringBuilder();
+        sb.append(isZh ? "应用包名: " : "Package: ").append(packageName).append("\n\n");
+
+        if (id.androidId != null) sb.append(isZh ? "Android ID: " : "Android ID: ").append(id.androidId).append("\n");
+        if (id.advertisingId != null) sb.append(isZh ? "广告ID (AAID): " : "Ad ID (AAID): ").append(id.advertisingId).append("\n");
+        if (id.appSetId != null) sb.append(isZh ? "AppSet ID: " : "AppSet ID: ").append(id.appSetId).append("\n");
+        if (id.imei != null) sb.append(isZh ? "IMEI: " : "IMEI: ").append(id.imei).append("\n");
+        if (id.meid != null) sb.append(isZh ? "MEID: " : "MEID: ").append(id.meid).append("\n");
+        if (id.serial != null) sb.append(isZh ? "序列号: " : "Serial: ").append(id.serial).append("\n");
+        if (id.macAddress != null) sb.append(isZh ? "MAC地址: " : "MAC: ").append(id.macAddress).append("\n");
+        if (id.gsfId != null) sb.append(isZh ? "GSF ID: " : "GSF ID: ").append(id.gsfId).append("\n");
+
+        sb.append("\n");
+        if (id.brand != null) sb.append(isZh ? "品牌: " : "Brand: ").append(id.brand).append("\n");
+        if (id.model != null) sb.append(isZh ? "型号: " : "Model: ").append(id.model).append("\n");
+        if (id.manufacturer != null) sb.append(isZh ? "厂商: " : "Manufacturer: ").append(id.manufacturer).append("\n");
+        if (id.device != null) sb.append(isZh ? "设备: " : "Device: ").append(id.device).append("\n");
+        if (id.product != null) sb.append(isZh ? "产品: " : "Product: ").append(id.product).append("\n");
+        if (id.hardware != null) sb.append(isZh ? "硬件: " : "Hardware: ").append(id.hardware).append("\n");
+        if (id.fingerprint != null) sb.append(isZh ? "指纹: " : "Fingerprint: ").append(id.fingerprint).append("\n");
+        if (id.buildId != null) sb.append(isZh ? "Build ID: " : "Build ID: ").append(id.buildId).append("\n");
+        if (id.bootloader != null) sb.append(isZh ? "Bootloader: " : "Bootloader: ").append(id.bootloader).append("\n");
+
+        sb.append("\n");
+        if (id.networkOperator != null) sb.append(isZh ? "网络运营商代码: " : "Network Op: ").append(id.networkOperator).append("\n");
+        if (id.networkOperatorName != null) sb.append(isZh ? "网络运营商: " : "Network Op Name: ").append(id.networkOperatorName).append("\n");
+        if (id.simOperator != null) sb.append(isZh ? "SIM运营商代码: " : "SIM Op: ").append(id.simOperator).append("\n");
+        if (id.simOperatorName != null) sb.append(isZh ? "SIM运营商: " : "SIM Op Name: ").append(id.simOperatorName).append("\n");
+        if (id.simCountryIso != null) sb.append(isZh ? "SIM国家: " : "SIM Country: ").append(id.simCountryIso).append("\n");
+
+        String title = isZh ? "当前伪装值" : "Current Spoofed Values";
+        String ok = isZh ? "确定" : "OK";
+        new AlertDialog.Builder(this)
+                .setTitle(title)
+                .setMessage(sb.toString())
+                .setPositiveButton(ok, null)
+                .show();
     }
 
     private void showResetDialog() {

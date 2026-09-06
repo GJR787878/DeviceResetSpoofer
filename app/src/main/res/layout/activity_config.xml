@@ -197,6 +197,28 @@
                 android:textColor="#FFFFFF"/>
         </LinearLayout>
 
+        <!-- 显示当前伪装值按钮 -->
+        <LinearLayout
+            android:id="@+id/btn_show_identity"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center"
+            android:padding="14dp"
+            android:background="@drawable/bg_pill_glass"
+            android:clickable="true"
+            android:focusable="true"
+            android:layout_marginBottom="20dp">
+            <TextView
+                android:id="@+id/tv_show_identity"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="显示当前伪装值"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF"/>
+        </LinearLayout>
+
         <!-- 底部提示：黑底白字，无背景 -->
         <TextView
             android:id="@+id/tv_footer"
