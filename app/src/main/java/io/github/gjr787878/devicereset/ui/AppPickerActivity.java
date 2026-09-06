@@ -42,7 +42,12 @@ public class AppPickerActivity extends AppCompatActivity {
     private static final String MODULE_PKG = "io.github.gjr787878.devicereset";
     private static final String MODULE_PKG_SHORT = "devicereset";
     private static final Pattern JSON_ARRAY_PATTERN = Pattern.compile("\\[([^\\[\\]]{2,5000})\\]");
+    private static final String PREFS_LANG = "app_language";
+    private static final String LANG_ZH = "zh";
+    private static final String LANG_EN = "en";
+    private static final String LANG_RU = "ru";
 
+    private String currentLang = LANG_ZH;
     private RecyclerView rvApps;
     private TextView tvLoading;
     private TextView tvEmpty;
@@ -63,6 +68,9 @@ public class AppPickerActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        SharedPreferences prefs = getSharedPreferences("devicereset_ui", MODE_PRIVATE);
+        currentLang = prefs.getString(PREFS_LANG, LANG_ZH);
+
         setContentView(R.layout.activity_app_picker);
 
         tvLoading = findViewById(R.id.tv_loading);
@@ -75,8 +83,23 @@ public class AppPickerActivity extends AppCompatActivity {
         adapter = new AppAdapter();
         rvApps.setAdapter(adapter);
 
-        setTitle("选择应用");
+        updateLanguage();
         loadApps();
+    }
+
+    private void updateLanguage() {
+        boolean zh = LANG_ZH.equals(currentLang);
+        boolean en = LANG_EN.equals(currentLang);
+        if (zh) {
+            setTitle("选择应用");
+            tvLoading.setText("正在扫描...");
+        } else if (en) {
+            setTitle("Select App");
+            tvLoading.setText("Scanning...");
+        } else {
+            setTitle("Выбор приложения");
+            tvLoading.setText("Сканирование...");
+        }
     }
 
     private void log(String msg) {
@@ -226,7 +249,13 @@ public class AppPickerActivity extends AppCompatActivity {
                 adapter.notifyDataSetChanged();
                 if (finalItems.isEmpty()) {
                     tvEmpty.setVisibility(View.VISIBLE);
-                    tvEmpty.setText("未找到作用域应用。\n请在 LSPosed 中勾选目标应用并重启。");
+                    if (LANG_ZH.equals(currentLang)) {
+                        tvEmpty.setText("未找到作用域应用。\n请在 LSPosed 中勾选目标应用并重启。");
+                    } else if (LANG_EN.equals(currentLang)) {
+                        tvEmpty.setText("No scoped apps found.\nPlease enable the module for target apps in LSPosed and reboot.");
+                    } else {
+                        tvEmpty.setText("Приложения в области действия не найдены.\nВключите модуль для целевых приложений в LSPosed и перезагрузите устройство.");
+                    }
                     tvDebug.setText(debugLog.toString());
                     tvDebug.setVisibility(View.VISIBLE);
                     rvApps.setVisibility(View.GONE);
@@ -236,7 +265,13 @@ public class AppPickerActivity extends AppCompatActivity {
                     rvApps.setVisibility(View.VISIBLE);
                     int withVal = 0;
                     for (AppItem i : finalItems) if (i.hasIdentity) withVal++;
-                    tvCount.setText(finalItems.size() + " 个应用 · " + withVal + " 个有伪装值");
+                    if (LANG_ZH.equals(currentLang)) {
+                        tvCount.setText(finalItems.size() + " 个应用 · " + withVal + " 个有伪装值");
+                    } else if (LANG_EN.equals(currentLang)) {
+                        tvCount.setText(finalItems.size() + " apps · " + withVal + " with identity");
+                    } else {
+                        tvCount.setText(finalItems.size() + " приложений · " + withVal + " с подменой");
+                    }
                 }
             });
         }).start();
@@ -683,11 +718,17 @@ public class AppPickerActivity extends AppCompatActivity {
                         showIdentityDialog(item);
                     });
                 } else {
-                    runOnUiThread(() -> new AlertDialog.Builder(this)
-                            .setTitle("写入失败")
-                            .setMessage("无法写入伪装值到目标应用目录。\n请确保已授予 Root 权限。")
-                            .setPositiveButton("确定", null)
-                            .show());
+                    runOnUiThread(() -> {
+                        String title, msg, ok;
+                        if (LANG_ZH.equals(currentLang)) {
+                            title = "写入失败"; msg = "无法写入伪装值到目标应用目录。\n请确保已授予 Root 权限。"; ok = "确定";
+                        } else if (LANG_EN.equals(currentLang)) {
+                            title = "Write Failed"; msg = "Cannot write identity to target app directory.\nPlease grant Root permission."; ok = "OK";
+                        } else {
+                            title = "Ошибка записи"; msg = "Не удалось записать подмену в каталог приложения.\nПредоставьте права Root."; ok = "ОК";
+                        }
+                        new AlertDialog.Builder(this).setTitle(title).setMessage(msg).setPositiveButton(ok, null).show();
+                    });
                 }
             } catch (Throwable e) {
                 log("生成身份异常: " + e.getMessage());
@@ -744,6 +785,8 @@ public class AppPickerActivity extends AppCompatActivity {
     }
 
     private void showIdentityDialog(AppItem item) {
+        boolean zh = LANG_ZH.equals(currentLang);
+        boolean en = LANG_EN.equals(currentLang);
         // 始终尝试读取，不依赖预扫描结果
         String json = item.identityJson;
         if (json == null) {
@@ -752,44 +795,70 @@ public class AppPickerActivity extends AppCompatActivity {
             if (json != null) item.hasIdentity = true;
         }
         if (json == null) {
+            String msg, btnGen, btnCancel;
+            if (zh) {
+                msg = "该应用暂无伪装值。\n可以立即生成一套随机伪装身份并写入，\n目标应用下次启动时将使用此身份。";
+                btnGen = "生成伪装值"; btnCancel = "取消";
+            } else if (en) {
+                msg = "No identity for this app yet.\nGenerate a random identity and write it now.\nThe target app will use it on next launch.";
+                btnGen = "Generate"; btnCancel = "Cancel";
+            } else {
+                msg = "Подмена для этого приложения ещё не задана.\nМожно сгенерировать случайную подмену и записать.\nПриложение использует её при следующем запуске.";
+                btnGen = "Сгенерировать"; btnCancel = "Отмена";
+            }
             new AlertDialog.Builder(this)
                     .setTitle(item.appName)
-                    .setMessage("该应用暂无伪装值。\n可以立即生成一套随机伪装身份并写入，\n目标应用下次启动时将使用此身份。")
-                    .setPositiveButton("生成伪装值", (d, w) -> generateAndWriteIdentity(item))
-                    .setNegativeButton("取消", null)
+                    .setMessage(msg)
+                    .setPositiveButton(btnGen, (d, w) -> generateAndWriteIdentity(item))
+                    .setNegativeButton(btnCancel, null)
                     .show();
             return;
         }
         Identity id = Identity.fromJson(item.identityJson);
         if (id == null) {
-            new AlertDialog.Builder(this).setTitle("解析失败").setPositiveButton("确定", null).show();
+            String title = zh ? "解析失败" : en ? "Parse Error" : "Ошибка парсинга";
+            String ok = zh ? "确定" : en ? "OK" : "ОК";
+            new AlertDialog.Builder(this).setTitle(title).setPositiveButton(ok, null).show();
             return;
         }
+        String lApp = zh ? "应用" : en ? "App" : "Приложение";
+        String lPkg = zh ? "包名" : en ? "Package" : "Пакет";
+        String lAdId = zh ? "广告ID" : en ? "Ad ID" : "Рекл. ID";
+        String lSerial = zh ? "序列号" : en ? "Serial" : "Серийный";
+        String lBrand = zh ? "品牌" : en ? "Brand" : "Бренд";
+        String lModel = zh ? "型号" : en ? "Model" : "Модель";
+        String lMfr = zh ? "厂商" : en ? "Manufacturer" : "Производитель";
+        String lFp = zh ? "指纹" : en ? "Fingerprint" : "Отпечаток";
+        String lCarrier = zh ? "运营商" : en ? "Carrier" : "Оператор";
+        String lCarrierCode = zh ? "运营商代码" : en ? "Carrier Code" : "Код оператора";
+        String lTitle = zh ? "当前伪装值" : en ? "Current Identity" : "Текущая подмена";
+        String ok = zh ? "确定" : en ? "OK" : "ОК";
+
         StringBuilder sb = new StringBuilder();
-        sb.append("应用: ").append(item.appName).append("\n");
-        sb.append("包名: ").append(item.packageName).append("\n\n");
+        sb.append(lApp).append(": ").append(item.appName).append("\n");
+        sb.append(lPkg).append(": ").append(item.packageName).append("\n\n");
         if (id.androidId != null) sb.append("Android ID: ").append(id.androidId).append("\n");
-        if (id.advertisingId != null) sb.append("广告ID: ").append(id.advertisingId).append("\n");
+        if (id.advertisingId != null) sb.append(lAdId).append(": ").append(id.advertisingId).append("\n");
         if (id.appSetId != null) sb.append("AppSet ID: ").append(id.appSetId).append("\n");
         if (id.imei != null) sb.append("IMEI: ").append(id.imei).append("\n");
         if (id.meid != null) sb.append("MEID: ").append(id.meid).append("\n");
-        if (id.serial != null) sb.append("序列号: ").append(id.serial).append("\n");
+        if (id.serial != null) sb.append(lSerial).append(": ").append(id.serial).append("\n");
         if (id.macAddress != null) sb.append("MAC: ").append(id.macAddress).append("\n");
         if (id.gsfId != null) sb.append("GSF ID: ").append(id.gsfId).append("\n");
         sb.append("\n");
-        if (id.brand != null) sb.append("品牌: ").append(id.brand).append("\n");
-        if (id.model != null) sb.append("型号: ").append(id.model).append("\n");
-        if (id.manufacturer != null) sb.append("厂商: ").append(id.manufacturer).append("\n");
-        if (id.fingerprint != null) sb.append("指纹: ").append(id.fingerprint).append("\n");
+        if (id.brand != null) sb.append(lBrand).append(": ").append(id.brand).append("\n");
+        if (id.model != null) sb.append(lModel).append(": ").append(id.model).append("\n");
+        if (id.manufacturer != null) sb.append(lMfr).append(": ").append(id.manufacturer).append("\n");
+        if (id.fingerprint != null) sb.append(lFp).append(": ").append(id.fingerprint).append("\n");
         if (id.buildId != null) sb.append("Build ID: ").append(id.buildId).append("\n");
         sb.append("\n");
-        if (id.networkOperatorName != null) sb.append("运营商: ").append(id.networkOperatorName).append("\n");
-        if (id.networkOperator != null) sb.append("运营商代码: ").append(id.networkOperator).append("\n");
+        if (id.networkOperatorName != null) sb.append(lCarrier).append(": ").append(id.networkOperatorName).append("\n");
+        if (id.networkOperator != null) sb.append(lCarrierCode).append(": ").append(id.networkOperator).append("\n");
 
         new AlertDialog.Builder(this)
-                .setTitle("当前伪装值")
+                .setTitle(lTitle)
                 .setMessage(sb.toString())
-                .setPositiveButton("确定", null)
+                .setPositiveButton(ok, null)
                 .show();
     }
 
