@@ -3,8 +3,6 @@ package io.github.gjr787878.devicereset.ui;
 import android.app.AlertDialog;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
-import android.database.Cursor;
-import android.database.sqlite.SQLiteDatabase;
 import android.graphics.drawable.Drawable;
 import android.os.Bundle;
 import android.view.LayoutInflater;
@@ -20,11 +18,15 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import org.json.JSONArray;
 
-import java.io.File;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import io.github.gjr787878.devicereset.GlassButtonDrawable;
 import io.github.gjr787878.devicereset.R;
@@ -32,8 +34,8 @@ import io.github.gjr787878.devicereset.xposed.Identity;
 
 public class AppPickerActivity extends AppCompatActivity {
 
-    private static final String LSPD_DB_PATH = "/data/adb/lspd/config/db";
     private static final String MODULE_PKG = "io.github.gjr787878.devicereset";
+    private static final Pattern JSON_ARRAY_PATTERN = Pattern.compile("\\[([^\\[\\]]{2,3000})\\]");
 
     private RecyclerView rvApps;
     private TextView tvLoading;
@@ -69,15 +71,17 @@ public class AppPickerActivity extends AppCompatActivity {
 
     private void loadApps() {
         new Thread(() -> {
-            // 1. 从 LSPosed 配置数据库读取作用域
+            // 1. 从 LSPosed 配置读取作用域（原始字节扫描，不依赖表结构）
             Set<String> scopePkgs = readLSPosedScope();
-            // 2. 扫描有哨兵文件的应用（有伪装值）
+            // 2. 扫描有哨兵文件的应用（有伪装值），排除模块自身
             Set<String> identityPkgs = scanIdentityPackages();
+            identityPkgs.remove(MODULE_PKG);
 
             // 合并：作用域中的应用 + 有伪装值的应用
             Set<String> allPkgs = new HashSet<>();
             allPkgs.addAll(scopePkgs);
             allPkgs.addAll(identityPkgs);
+            allPkgs.remove(MODULE_PKG);
 
             PackageManager pm = getPackageManager();
             List<AppItem> items = new ArrayList<>();
@@ -122,46 +126,142 @@ public class AppPickerActivity extends AppCompatActivity {
         }).start();
     }
 
-    /** 从 LSPosed 配置数据库读取模块作用域 */
+    // ==================== LSPosed 作用域读取（原始字节扫描） ====================
+
+    /** 从 LSPosed 配置数据库读取模块作用域，直接扫描原始字节中的 JSON 数组 */
     private Set<String> readLSPosedScope() {
         Set<String> result = new HashSet<>();
-        File tmpDb = null;
         try {
-            tmpDb = new File(getCacheDir(), "lspd_db");
-            // 用 root 复制数据库到缓存目录
-            Process su = Runtime.getRuntime().exec("su");
-            java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
-            os.writeBytes("cp '" + LSPD_DB_PATH + "' '" + tmpDb.getAbsolutePath() + "'\n");
-            os.writeBytes("chmod 666 '" + tmpDb.getAbsolutePath() + "'\n");
-            os.writeBytes("exit\n");
-            os.flush();
-            su.waitFor();
+            // 1. 找出所有可能的 LSPosed 配置数据库路径
+            List<String> dbPaths = findLSPosedDbPaths();
+            if (dbPaths.isEmpty()) return result;
 
-            if (!tmpDb.exists() || tmpDb.length() == 0) return result;
+            // 2. 对每个数据库，读取原始字节并扫描 JSON 数组
+            for (String path : dbPaths) {
+                byte[] data = readFileViaRoot(path);
+                if (data == null || data.length == 0) continue;
 
-            SQLiteDatabase db = SQLiteDatabase.openDatabase(
-                    tmpDb.getAbsolutePath(), null, SQLiteDatabase.OPEN_READONLY);
-            // 查询 modules 表中本模块的 scope 字段
-            Cursor cursor = db.rawQuery(
-                    "SELECT scope FROM modules WHERE module_pkg_name=?",
-                    new String[]{MODULE_PKG});
-            if (cursor.moveToFirst()) {
-                String scopeJson = cursor.getString(0);
-                if (scopeJson != null) {
-                    JSONArray arr = new JSONArray(scopeJson);
-                    for (int i = 0; i < arr.length(); i++) {
-                        result.add(arr.getString(i));
-                    }
+                // SQLite 中文本以 UTF-8 明文存储，直接转字符串扫描
+                String text = new String(data, StandardCharsets.UTF_8);
+                Matcher m = JSON_ARRAY_PATTERN.matcher(text);
+                while (m.find()) {
+                    String jsonStr = "[" + m.group(1) + "]";
+                    try {
+                        JSONArray arr = new JSONArray(jsonStr);
+                        if (arr.length() == 0) continue;
+                        // 检查是否为包名数组（至少一个元素是合法包名）
+                        boolean hasValidPkg = false;
+                        List<String> pkgs = new ArrayList<>();
+                        for (int i = 0; i < arr.length(); i++) {
+                            String pkg = arr.optString(i, "");
+                            if (isValidPackageName(pkg)) {
+                                hasValidPkg = true;
+                                pkgs.add(pkg);
+                            }
+                        }
+                        if (hasValidPkg) {
+                            result.addAll(pkgs);
+                        }
+                    } catch (Throwable ignored) {}
                 }
+                if (!result.isEmpty()) break;
             }
-            cursor.close();
-            db.close();
-        } catch (Throwable ignored) {
-        } finally {
-            if (tmpDb != null && tmpDb.exists()) tmpDb.delete();
-        }
+        } catch (Throwable ignored) {}
+        result.remove(MODULE_PKG);
         return result;
     }
+
+    /** 查找 LSPosed 配置数据库路径 */
+    private List<String> findLSPosedDbPaths() {
+        List<String> paths = new ArrayList<>();
+        // 已知路径
+        String[] known = {
+                "/data/adb/lspd/config/db",
+                "/data/adb/lspd/config/modules_config.db",
+                "/data/adb/lspd/config/lspd.db",
+        };
+        for (String p : known) paths.add(p);
+
+        // 列出 /data/adb/lspd/config/ 目录，找所有文件
+        try {
+            Process su = Runtime.getRuntime().exec("su");
+            java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
+            os.writeBytes("ls -1 /data/adb/lspd/config/ 2>/dev/null\n");
+            os.writeBytes("exit\n");
+            os.flush();
+            java.io.BufferedReader reader = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(su.getInputStream()));
+            String line;
+            while ((line = reader.readLine()) != null) {
+                line = line.trim();
+                if (!line.isEmpty()) {
+                    String full = "/data/adb/lspd/config/" + line;
+                    if (!paths.contains(full)) paths.add(full);
+                }
+            }
+            reader.close();
+            su.waitFor();
+        } catch (Throwable ignored) {}
+
+        // 也试试 /data/adb/lspd/ 下其他子目录
+        try {
+            Process su = Runtime.getRuntime().exec("su");
+            java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
+            os.writeBytes("find /data/adb/lspd -maxdepth 2 -type f 2>/dev/null\n");
+            os.writeBytes("exit\n");
+            os.flush();
+            java.io.BufferedReader reader = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(su.getInputStream()));
+            String line;
+            while ((line = reader.readLine()) != null) {
+                line = line.trim();
+                if (!line.isEmpty() && !paths.contains(line)) paths.add(line);
+            }
+            reader.close();
+            su.waitFor();
+        } catch (Throwable ignored) {}
+
+        return paths;
+    }
+
+    /** 通过 root 读取文件原始字节 */
+    private byte[] readFileViaRoot(String path) {
+        try {
+            Process su = Runtime.getRuntime().exec("su");
+            java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
+            os.writeBytes("cat '" + path + "'\n");
+            os.writeBytes("exit\n");
+            os.flush();
+            InputStream is = su.getInputStream();
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = is.read(buf)) != -1) baos.write(buf, 0, n);
+            is.close();
+            su.waitFor();
+            byte[] data = baos.toByteArray();
+            // SQLite 文件头是 "SQLite format 3\0"，验证一下
+            if (data.length > 16 && new String(data, 0, 13, StandardCharsets.UTF_8).equals("SQLite format")) {
+                return data;
+            }
+            // 不是 SQLite 也返回，可能是其他格式
+            return data.length > 0 ? data : null;
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
+    /** 检查是否为合法 Android 包名 */
+    private boolean isValidPackageName(String pkg) {
+        if (pkg == null || pkg.length() < 3) return false;
+        // 包名必须包含至少一个点，且只含字母数字下划线点
+        if (!pkg.contains(".")) return false;
+        if (!pkg.matches("[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z0-9_]+)+")) return false;
+        // 排除常见的非应用包名
+        if (pkg.equals("android") || pkg.startsWith("android.")) return false;
+        return true;
+    }
+
+    // ==================== 哨兵文件扫描 ====================
 
     /** 扫描所有有 .identity_sentinel 文件的应用 */
     private Set<String> scanIdentityPackages() {
@@ -256,7 +356,6 @@ public class AppPickerActivity extends AppCompatActivity {
         public VH onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
             View v = LayoutInflater.from(parent.getContext())
                     .inflate(R.layout.item_app_picker, parent, false);
-            // 玻璃卡片背景
             float density = parent.getResources().getDisplayMetrics().density;
             GlassButtonDrawable bg = new GlassButtonDrawable(
                     Math.round(16 * density), Math.round(1 * density), false);
@@ -270,7 +369,6 @@ public class AppPickerActivity extends AppCompatActivity {
             holder.icon.setImageDrawable(item.icon);
             holder.name.setText(item.appName);
             holder.pkg.setText(item.packageName);
-            // 状态点颜色
             if (item.hasIdentity) {
                 holder.dot.setBackgroundResource(R.drawable.status_dot);
             } else {
