@@ -103,36 +103,45 @@ public class AppPickerActivity extends AppCompatActivity {
             PackageManager pm = getPackageManager();
             List<AppItem> items = new ArrayList<>();
             for (String pkg : allPkgs) {
+                AppItem item = new AppItem();
+                item.packageName = pkg;
+                item.appName = pkg;
+                item.icon = getResources().getDrawable(android.R.drawable.sym_def_app_icon);
                 try {
                     ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
-                    AppItem item = new AppItem();
-                    item.packageName = pkg;
+                    // 名称：优先用 PackageManager 的版本
                     try {
-                        item.appName = pm.getApplicationLabel(ai).toString();
-                    } catch (Throwable e) {
-                        item.appName = pkg;
+                        CharSequence label = pm.getApplicationLabel(ai);
+                        if (label != null) item.appName = label.toString();
+                    } catch (Throwable ignored) {}
+                    if (item.appName.equals(pkg)) {
+                        try {
+                            CharSequence label = ai.loadLabel(pm);
+                            if (label != null && !label.toString().equals(pkg)) {
+                                item.appName = label.toString();
+                            }
+                        } catch (Throwable ignored) {}
                     }
+                    // 图标：优先用 pm.getApplicationIcon(pkg)（对停止状态应用更友好）
                     try {
-                        item.icon = pm.getApplicationIcon(ai);
-                    } catch (Throwable e) {
-                        item.icon = getResources().getDrawable(android.R.drawable.sym_def_app_icon);
+                        Drawable icon = pm.getApplicationIcon(pkg);
+                        if (icon != null) item.icon = icon;
+                    } catch (Throwable ignored) {}
+                    if (item.icon == null || item.icon.getConstantState() == null) {
+                        try {
+                            Drawable icon = ai.loadIcon(pm);
+                            if (icon != null) item.icon = icon;
+                        } catch (Throwable ignored) {}
                     }
-                    item.hasIdentity = identityPkgs.contains(pkg);
-                    if (item.hasIdentity) {
-                        item.identityJson = readIdentityFile(pkg);
-                    }
-                    items.add(item);
-                    log("已添加应用: " + pkg + " -> " + item.appName);
                 } catch (Throwable e) {
-                    log("获取应用信息失败 " + pkg + ": " + e.getMessage());
-                    // 即使获取不到信息，也用包名添加
-                    AppItem item = new AppItem();
-                    item.packageName = pkg;
-                    item.appName = pkg;
-                    item.icon = getResources().getDrawable(android.R.drawable.sym_def_app_icon);
-                    item.hasIdentity = identityPkgs.contains(pkg);
-                    items.add(item);
+                    log("getApplicationInfo失败 " + pkg + ": " + e.getMessage());
                 }
+                item.hasIdentity = identityPkgs.contains(pkg);
+                if (item.hasIdentity) {
+                    item.identityJson = readIdentityFile(pkg);
+                }
+                items.add(item);
+                log("已添加: " + pkg + " name=" + item.appName + " hasIdentity=" + item.hasIdentity);
             }
             log("最终应用列表: " + items.size() + " 个");
 
@@ -502,7 +511,8 @@ public class AppPickerActivity extends AppCompatActivity {
         try {
             Process su = Runtime.getRuntime().exec("su");
             java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
-            os.writeBytes("for d in /data/data/*/; do pkg=$(basename \"$d\"); if [ -f \"$d/files/.identity_sentinel\" ]; then echo \"$pkg\"; fi; done\n");
+            // 同时扫描 /data/data/ 和 /data/user/0/
+            os.writeBytes("for d in /data/data/*/ /data/user/0/*/; do pkg=$(basename \"$d\"); if [ -f \"$d/files/.identity_sentinel\" ]; then echo \"$pkg\"; fi; done 2>/dev/null\n");
             os.writeBytes("exit\n");
             os.flush();
             java.io.BufferedReader reader = new java.io.BufferedReader(
@@ -515,32 +525,49 @@ public class AppPickerActivity extends AppCompatActivity {
             reader.close();
             su.waitFor();
         } catch (Throwable ignored) {}
+        log("哨兵扫描结果: " + result);
         return result;
     }
 
     private String readIdentityFile(String packageName) {
-        try {
-            String path = "/data/data/" + packageName + "/files/.identity_sentinel";
-            Process su = Runtime.getRuntime().exec("su");
-            java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
-            os.writeBytes("cat '" + path + "'\n");
-            os.writeBytes("exit\n");
-            os.flush();
-            java.io.BufferedReader reader = new java.io.BufferedReader(
-                    new java.io.InputStreamReader(su.getInputStream()));
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = reader.readLine()) != null) sb.append(line);
-            reader.close();
-            su.waitFor();
-            String output = sb.toString().trim();
-            if (!output.isEmpty() && output.startsWith("{")) return output;
-        } catch (Throwable ignored) {}
+        String[] paths = {
+                "/data/data/" + packageName + "/files/.identity_sentinel",
+                "/data/user/0/" + packageName + "/files/.identity_sentinel",
+        };
+        for (String path : paths) {
+            try {
+                Process su = Runtime.getRuntime().exec("su");
+                java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
+                os.writeBytes("cat '" + path + "' 2>/dev/null\n");
+                os.writeBytes("exit\n");
+                os.flush();
+                java.io.BufferedReader reader = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(su.getInputStream()));
+                StringBuilder sb = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) sb.append(line);
+                reader.close();
+                su.waitFor();
+                String output = sb.toString().trim();
+                if (!output.isEmpty() && output.startsWith("{")) {
+                    log("读取到伪装值 " + packageName + " 从 " + path);
+                    return output;
+                }
+            } catch (Throwable ignored) {}
+        }
+        log("未读取到伪装值 " + packageName);
         return null;
     }
 
     private void showIdentityDialog(AppItem item) {
-        if (!item.hasIdentity || item.identityJson == null) {
+        // 始终尝试读取，不依赖预扫描结果
+        String json = item.identityJson;
+        if (json == null) {
+            json = readIdentityFile(item.packageName);
+            item.identityJson = json;
+            if (json != null) item.hasIdentity = true;
+        }
+        if (json == null) {
             new AlertDialog.Builder(this)
                     .setTitle(item.appName)
                     .setMessage("该应用暂无伪装值。\n请先运行一次该应用，模块会自动生成伪装身份。")

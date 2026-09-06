@@ -23,7 +23,7 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  * 立刻执行哨兵检测并安装所有设备ID Hook。
  */
 public class MainHook implements IXposedHookLoadPackage {
-    private static final String MODULE_PACKAGE = "com.devicereset";
+    private static final String MODULE_PACKAGE = "io.github.gjr787878.devicereset";
     private static final String PREFS_NAME = "devicereset_config";
     private static XSharedPreferences xPrefs;
     private static boolean prefsAvailable = false;
