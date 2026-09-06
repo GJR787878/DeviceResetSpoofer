@@ -172,6 +172,37 @@ public class AppPickerActivity extends AppCompatActivity {
                     }
                 } catch (Throwable e) {
                     log("getApplicationInfo失败 " + pkg + ": " + e.getMessage());
+                    // 兜底：应用可能在其他用户/工作profile，用root找APK路径
+                    String apkPath = findApkPathViaRoot(pkg);
+                    log("root查找APK " + pkg + " -> " + apkPath);
+                    if (apkPath != null) {
+                        try {
+                            android.content.pm.PackageInfo archiveInfo = pm.getPackageArchiveInfo(apkPath, PackageManager.GET_META_DATA);
+                            if (archiveInfo != null && archiveInfo.applicationInfo != null) {
+                                archiveInfo.applicationInfo.sourceDir = apkPath;
+                                archiveInfo.applicationInfo.publicSourceDir = apkPath;
+                                // 名称
+                                try {
+                                    CharSequence label = archiveInfo.applicationInfo.loadLabel(pm);
+                                    if (label != null && !label.toString().equals(pkg)) {
+                                        item.appName = label.toString();
+                                    }
+                                } catch (Throwable ignored) {}
+                                // 图标
+                                try {
+                                    Drawable icon = pm.getApplicationIcon(archiveInfo.applicationInfo);
+                                    if (icon != null) {
+                                        item.icon = icon;
+                                        log("从APK加载图标成功 " + pkg);
+                                    }
+                                } catch (Throwable e2) {
+                                    log("从APK加载图标失败 " + pkg + ": " + e2.getMessage());
+                                }
+                            }
+                        } catch (Throwable e2) {
+                            log("getPackageArchiveInfo失败 " + pkg + ": " + e2.getMessage());
+                        }
+                    }
                 }
                 item.hasIdentity = identityPkgs.contains(pkg);
                 if (item.hasIdentity) {
@@ -510,6 +541,32 @@ public class AppPickerActivity extends AppCompatActivity {
             su.waitFor();
         } catch (Throwable ignored) {}
         return paths;
+    }
+
+    /** 通过 root 用 pm path 查找应用 APK 路径（适用于其他用户/工作profile的应用） */
+    private String findApkPathViaRoot(String packageName) {
+        try {
+            Process su = Runtime.getRuntime().exec("su");
+            java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
+            os.writeBytes("pm path " + packageName + " 2>/dev/null\n");
+            os.writeBytes("exit\n");
+            os.flush();
+            java.io.BufferedReader reader = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(su.getInputStream()));
+            String line;
+            while ((line = reader.readLine()) != null) {
+                line = line.trim();
+                if (line.startsWith("package:")) {
+                    String path = line.substring(8).trim();
+                    reader.close();
+                    su.waitFor();
+                    return path;
+                }
+            }
+            reader.close();
+            su.waitFor();
+        } catch (Throwable ignored) {}
+        return null;
     }
 
     /** 通过 root 读取文件原始字节 */
