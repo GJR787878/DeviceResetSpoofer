@@ -1,6 +1,7 @@
 package io.github.gjr787878.devicereset.ui;
 
 import android.app.AlertDialog;
+import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
@@ -719,15 +720,15 @@ public class AppPickerActivity extends AppCompatActivity {
                     });
                 } else {
                     runOnUiThread(() -> {
-                        String title, msg, ok;
+                        String title, msg, btnOk;
                         if (LANG_ZH.equals(currentLang)) {
-                            title = "写入失败"; msg = "无法写入伪装值到目标应用目录。\n请确保已授予 Root 权限。"; ok = "确定";
+                            title = "写入失败"; msg = "无法写入伪装值到目标应用目录。\n请确保已授予 Root 权限。"; btnOk = "确定";
                         } else if (LANG_EN.equals(currentLang)) {
-                            title = "Write Failed"; msg = "Cannot write identity to target app directory.\nPlease grant Root permission."; ok = "OK";
+                            title = "Write Failed"; msg = "Cannot write identity to target app directory.\nPlease grant Root permission."; btnOk = "OK";
                         } else {
-                            title = "Ошибка записи"; msg = "Не удалось записать подмену в каталог приложения.\nПредоставьте права Root."; ok = "ОК";
+                            title = "Ошибка записи"; msg = "Не удалось записать подмену в каталог приложения.\nПредоставьте права Root."; btnOk = "ОК";
                         }
-                        new AlertDialog.Builder(this).setTitle(title).setMessage(msg).setPositiveButton(ok, null).show();
+                        new AlertDialog.Builder(this).setTitle(title).setMessage(msg).setPositiveButton(btnOk, null).show();
                     });
                 }
             } catch (Throwable e) {
