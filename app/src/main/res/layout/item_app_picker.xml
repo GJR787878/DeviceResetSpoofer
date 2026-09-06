@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:padding="14dp"
+    android:layout_marginBottom="10dp">
+
+    <ImageView
+        android:id="@+id/app_icon"
+        android:layout_width="42dp"
+        android:layout_height="42dp"
+        android:scaleType="fitCenter"
+        android:layout_marginEnd="14dp"/>
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/app_name"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="15sp"
+            android:textColor="#FFFFFF"
+            android:singleLine="true"
+            android:ellipsize="end"/>
+
+        <TextView
+            android:id="@+id/app_package"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="11sp"
+            android:textColor="#888888"
+            android:singleLine="true"
+            android:ellipsize="end"
+            android:layout_marginTop="2dp"/>
+    </LinearLayout>
+
+    <!-- 状态指示：有伪装值=蓝色圆点，未运行=灰色 -->
+    <View
+        android:id="@+id/status_dot"
+        android:layout_width="10dp"
+        android:layout_height="10dp"
+        android:background="@drawable/status_dot"
+        android:layout_marginStart="12dp"/>
+
+</LinearLayout>

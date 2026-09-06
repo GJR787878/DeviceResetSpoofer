@@ -1,5 +1,6 @@
 package io.github.gjr787878.devicereset.ui;
 
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
@@ -170,7 +171,8 @@ public class ConfigActivity extends AppCompatActivity {
         LinearLayout btnShowIdentity = findViewById(R.id.btn_show_identity);
         GlassButtonDrawable glassShowIdentity = new GlassButtonDrawable(radiusPx, borderPx, false);
         btnShowIdentity.setBackground(glassShowIdentity);
-        btnShowIdentity.setOnClickListener(v -> showAppPickerDialog());
+        btnShowIdentity.setOnClickListener(v ->
+                startActivity(new Intent(this, AppPickerActivity.class)));
     }
 
     private GlassButtonDrawable getGlassDrawable(int index) {
