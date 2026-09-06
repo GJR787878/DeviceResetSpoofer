@@ -111,44 +111,64 @@ public class AppPickerActivity extends AppCompatActivity {
                 item.icon = defaultIcon;
                 try {
                     ApplicationInfo ai = pm.getApplicationInfo(pkg, PackageManager.GET_META_DATA);
-                    // 名称：多种方式尝试
+                    log("图标调试 " + pkg + " sourceDir=" + ai.sourceDir + " publicSourceDir=" + ai.publicSourceDir + " iconRes=" + ai.icon + " enabled=" + ai.enabled + " suspended=" + ((ai.flags & ApplicationInfo.FLAG_SUSPENDED) != 0));
+
+                    // 名称
                     try {
                         CharSequence label = ai.loadLabel(pm);
                         if (label != null && !label.toString().equals(pkg)) {
                             item.appName = label.toString();
                         }
-                    } catch (Throwable ignored) {}
-                    if (item.appName.equals(pkg)) {
-                        try {
-                            CharSequence label = pm.getApplicationLabel(ai);
-                            if (label != null && !label.toString().equals(pkg)) {
-                                item.appName = label.toString();
-                            }
-                        } catch (Throwable ignored) {}
+                    } catch (Throwable e) {
+                        log("名称loadLabel失败: " + e.getMessage());
                     }
-                    // 图标：方式1 - 直接从应用资源加载（最可靠）
+
+                    // 图标方式1：直接从APK文件读取（绕过应用挂起/休眠状态）
                     try {
-                        android.content.res.Resources res = pm.getResourcesForApplication(ai);
-                        if (ai.icon != 0) {
-                            Drawable icon = res.getDrawable(ai.icon, null);
-                            if (icon != null) item.icon = icon;
+                        String apkPath = ai.publicSourceDir != null ? ai.publicSourceDir : ai.sourceDir;
+                        if (apkPath != null && new java.io.File(apkPath).exists()) {
+                            android.content.pm.PackageInfo archiveInfo = pm.getPackageArchiveInfo(apkPath, PackageManager.GET_META_DATA);
+                            if (archiveInfo != null && archiveInfo.applicationInfo != null) {
+                                archiveInfo.applicationInfo.sourceDir = apkPath;
+                                archiveInfo.applicationInfo.publicSourceDir = apkPath;
+                                Drawable icon = pm.getApplicationIcon(archiveInfo.applicationInfo);
+                                if (icon != null) {
+                                    item.icon = icon;
+                                    log("图标方式1(APK)成功 " + pkg);
+                                }
+                            }
                         }
                     } catch (Throwable e) {
-                        log("图标方式1失败 " + pkg + ": " + e.getMessage());
+                        log("图标方式1(APK)失败 " + pkg + ": " + e.getMessage());
                     }
-                    // 图标：方式2 - PackageManager
+
+                    // 图标方式2：getResourcesForApplication
                     if (item.icon == defaultIcon) {
                         try {
-                            Drawable icon = pm.getApplicationIcon(ai);
-                            if (icon != null) item.icon = icon;
-                        } catch (Throwable ignored) {}
+                            android.content.res.Resources res = pm.getResourcesForApplication(ai);
+                            if (ai.icon != 0) {
+                                Drawable icon = res.getDrawable(ai.icon, null);
+                                if (icon != null) {
+                                    item.icon = icon;
+                                    log("图标方式2(Resources)成功 " + pkg);
+                                }
+                            }
+                        } catch (Throwable e) {
+                            log("图标方式2(Resources)失败 " + pkg + ": " + e.getMessage());
+                        }
                     }
-                    // 图标：方式3 - String版本
+
+                    // 图标方式3：pm.getApplicationIcon(pkg) String版本
                     if (item.icon == defaultIcon) {
                         try {
                             Drawable icon = pm.getApplicationIcon(pkg);
-                            if (icon != null) item.icon = icon;
-                        } catch (Throwable ignored) {}
+                            if (icon != null) {
+                                item.icon = icon;
+                                log("图标方式3(pm)成功 " + pkg);
+                            }
+                        } catch (Throwable e) {
+                            log("图标方式3(pm)失败 " + pkg + ": " + e.getMessage());
+                        }
                     }
                 } catch (Throwable e) {
                     log("getApplicationInfo失败 " + pkg + ": " + e.getMessage());
@@ -158,7 +178,7 @@ public class AppPickerActivity extends AppCompatActivity {
                     item.identityJson = readIdentityFile(pkg);
                 }
                 items.add(item);
-                log("已添加: " + pkg + " name=" + item.appName + " hasIdentity=" + item.hasIdentity);
+                log("已添加: " + pkg + " name=" + item.appName + " iconIsDefault=" + (item.icon == defaultIcon) + " hasIdentity=" + item.hasIdentity);
             }
             log("最终应用列表: " + items.size() + " 个");
 
@@ -181,7 +201,8 @@ public class AppPickerActivity extends AppCompatActivity {
                     rvApps.setVisibility(View.GONE);
                 } else {
                     tvEmpty.setVisibility(View.GONE);
-                    tvDebug.setVisibility(View.GONE);
+                    tvDebug.setText(debugLog.toString());
+                    tvDebug.setVisibility(View.VISIBLE);
                     rvApps.setVisibility(View.VISIBLE);
                     int withVal = 0;
                     for (AppItem i : finalItems) if (i.hasIdentity) withVal++;
