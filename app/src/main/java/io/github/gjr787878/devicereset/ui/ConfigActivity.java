@@ -1,6 +1,8 @@
 package io.github.gjr787878.devicereset.ui;
 
 import android.content.SharedPreferences;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.util.TypedValue;
 import android.view.Menu;
@@ -168,7 +170,7 @@ public class ConfigActivity extends AppCompatActivity {
         LinearLayout btnShowIdentity = findViewById(R.id.btn_show_identity);
         GlassButtonDrawable glassShowIdentity = new GlassButtonDrawable(radiusPx, borderPx, false);
         btnShowIdentity.setBackground(glassShowIdentity);
-        btnShowIdentity.setOnClickListener(v -> showIdentityInputDialog());
+        btnShowIdentity.setOnClickListener(v -> showAppPickerDialog());
     }
 
     private GlassButtonDrawable getGlassDrawable(int index) {
@@ -283,66 +285,90 @@ public class ConfigActivity extends AppCompatActivity {
     }
 
     // ==================== 显示当前伪装值 ====================
-    private void showIdentityInputDialog() {
+    private void showAppPickerDialog() {
         boolean isZh = LANG_ZH.equals(currentLang);
         boolean isEn = LANG_EN.equals(currentLang);
-        final EditText input = new EditText(this);
-        if (isZh) {
-            input.setHint("输入目标应用包名，如 com.example.app");
-        } else if (isEn) {
-            input.setHint("Enter target app package name, e.g. com.example.app");
-        } else {
-            input.setHint("Введите имя пакета целевого приложения");
-        }
-        LinearLayout layout = new LinearLayout(this);
-        layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(48, 24, 48, 24);
-        layout.addView(input);
+        String loadingTitle = isZh ? "正在扫描" : isEn ? "Scanning" : "Сканирование";
+        String loadingMsg = isZh ? "正在扫描有伪装值的应用..." : isEn ? "Scanning apps with spoofed identity..." : "Сканирование приложений с подменённой идентичностью...";
 
-        String title, message, positive, negative, emptyMsg;
-        if (isZh) {
-            title = "显示当前伪装值";
-            message = "输入目标应用的包名，读取该应用当前使用的伪装设备信息。需要 Root 权限。";
-            positive = "读取";
-            negative = "取消";
-            emptyMsg = "请输入包名";
-        } else if (isEn) {
-            title = "Show Current Spoofed Values";
-            message = "Enter the target app's package name to read its current spoofed device identity. Requires Root.";
-            positive = "Read";
-            negative = "Cancel";
-            emptyMsg = "Please enter package name";
-        } else {
-            title = "Показать текущие подменные значения";
-            message = "Введите имя пакета целевого приложения для чтения его текущей подменённой идентификации. Требуется Root.";
-            positive = "Читать";
-            negative = "Отмена";
-            emptyMsg = "Введите имя пакета";
-        }
-
-        final String fEmptyMsg = emptyMsg;
-        new AlertDialog.Builder(this)
-                .setTitle(title)
-                .setMessage(message)
-                .setView(layout)
-                .setPositiveButton(positive, (dialog, which) -> {
-                    String pkg = input.getText().toString().trim();
-                    if (pkg.isEmpty()) {
-                        Toast.makeText(this, fEmptyMsg, Toast.LENGTH_SHORT).show();
-                        return;
-                    }
-                    String json = readIdentityFile(pkg);
-                    if (json == null) {
-                        String failMsg = isZh ? "读取失败，请确保已授予 Root 权限且该应用已运行过"
-                                : isEn ? "Read failed. Ensure Root access and the app has been launched at least once."
-                                : "Ошибка чтения. Проверьте Root и что приложение запускалось хотя бы раз.";
-                        Toast.makeText(this, failMsg, Toast.LENGTH_LONG).show();
-                        return;
-                    }
-                    showIdentityDialog(pkg, json);
-                })
-                .setNegativeButton(negative, null)
+        AlertDialog loading = new AlertDialog.Builder(this)
+                .setTitle(loadingTitle)
+                .setMessage(loadingMsg)
+                .setCancelable(false)
                 .show();
+
+        new Thread(() -> {
+            // 一条 root 命令列出所有有哨兵文件的包名
+            final java.util.List<String> pkgs = scanPackagesWithIdentity();
+            runOnUiThread(() -> {
+                loading.dismiss();
+                if (pkgs.isEmpty()) {
+                    String emptyMsg = isZh ? "未找到有伪装值的应用。\n请确保目标应用已在 LSPosed 作用域中勾选并至少运行过一次。"
+                            : isEn ? "No apps with spoofed identity found.\nEnsure target apps are checked in LSPosed scope and launched at least once."
+                            : "Не найдено приложений с подменённой идентичностью.\nУбедитесь, что целевые приложения отмечены в области LSPosed и запускались хотя бы раз.";
+                    new AlertDialog.Builder(this)
+                            .setTitle(isZh ? "提示" : isEn ? "Notice" : "Уведомление")
+                            .setMessage(emptyMsg)
+                            .setPositiveButton(isZh ? "确定" : "OK", null)
+                            .show();
+                    return;
+                }
+
+                // 匹配应用名
+                PackageManager pm = getPackageManager();
+                final String[] displayNames = new String[pkgs.size()];
+                for (int i = 0; i < pkgs.size(); i++) {
+                    String pkg = pkgs.get(i);
+                    try {
+                        ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
+                        String name = pm.getApplicationLabel(ai).toString();
+                        displayNames[i] = name + "\n" + pkg;
+                    } catch (Throwable e) {
+                        displayNames[i] = pkg;
+                    }
+                }
+
+                String title = isZh ? "选择应用" : isEn ? "Select App" : "Выберите приложение";
+                new AlertDialog.Builder(this)
+                        .setTitle(title)
+                        .setItems(displayNames, (dialog, which) -> {
+                            String pkg = pkgs.get(which);
+                            String json = readIdentityFile(pkg);
+                            if (json != null) {
+                                showIdentityDialog(pkg, json);
+                            } else {
+                                String failMsg = isZh ? "读取失败" : isEn ? "Read failed" : "Ошибка чтения";
+                                Toast.makeText(this, failMsg, Toast.LENGTH_SHORT).show();
+                            }
+                        })
+                        .setNegativeButton(isZh ? "取消" : isEn ? "Cancel" : "Отмена", null)
+                        .show();
+            });
+        }).start();
+    }
+
+    /** 通过 Root 扫描所有有 .identity_sentinel 文件的应用包名 */
+    private java.util.List<String> scanPackagesWithIdentity() {
+        java.util.List<String> result = new java.util.ArrayList<>();
+        try {
+            Process su = Runtime.getRuntime().exec("su");
+            java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
+            os.writeBytes("for d in /data/data/*/; do pkg=$(basename \"$d\"); if [ -f \"$d/files/.identity_sentinel\" ]; then echo \"$pkg\"; fi; done\n");
+            os.writeBytes("exit\n");
+            os.flush();
+            java.io.BufferedReader reader = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(su.getInputStream()));
+            String line;
+            while ((line = reader.readLine()) != null) {
+                line = line.trim();
+                if (!line.isEmpty()) {
+                    result.add(line);
+                }
+            }
+            reader.close();
+            su.waitFor();
+        } catch (Throwable ignored) {}
+        return result;
     }
 
     /** 通过 Root 读取目标应用的哨兵文件 */
