@@ -70,6 +70,7 @@ public class AppPickerActivity extends AppCompatActivity {
         tvDebug = findViewById(R.id.tv_debug);
         rvApps = findViewById(R.id.rv_apps);
         rvApps.setLayoutManager(new LinearLayoutManager(this));
+        rvApps.setNestedScrollingEnabled(false);
         adapter = new AppAdapter();
         rvApps.setAdapter(adapter);
 
@@ -106,15 +107,34 @@ public class AppPickerActivity extends AppCompatActivity {
                     ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
                     AppItem item = new AppItem();
                     item.packageName = pkg;
-                    item.appName = pm.getApplicationLabel(ai).toString();
-                    item.icon = pm.getApplicationIcon(ai);
+                    try {
+                        item.appName = pm.getApplicationLabel(ai).toString();
+                    } catch (Throwable e) {
+                        item.appName = pkg;
+                    }
+                    try {
+                        item.icon = pm.getApplicationIcon(ai);
+                    } catch (Throwable e) {
+                        item.icon = getResources().getDrawable(android.R.drawable.sym_def_app_icon);
+                    }
                     item.hasIdentity = identityPkgs.contains(pkg);
                     if (item.hasIdentity) {
                         item.identityJson = readIdentityFile(pkg);
                     }
                     items.add(item);
-                } catch (Throwable ignored) {}
+                    log("已添加应用: " + pkg + " -> " + item.appName);
+                } catch (Throwable e) {
+                    log("获取应用信息失败 " + pkg + ": " + e.getMessage());
+                    // 即使获取不到信息，也用包名添加
+                    AppItem item = new AppItem();
+                    item.packageName = pkg;
+                    item.appName = pkg;
+                    item.icon = getResources().getDrawable(android.R.drawable.sym_def_app_icon);
+                    item.hasIdentity = identityPkgs.contains(pkg);
+                    items.add(item);
+                }
             }
+            log("最终应用列表: " + items.size() + " 个");
 
             items.sort((a, b) -> {
                 if (a.hasIdentity != b.hasIdentity) return a.hasIdentity ? -1 : 1;
