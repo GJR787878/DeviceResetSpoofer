@@ -5,8 +5,8 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
-import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.Drawable;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -39,14 +39,17 @@ import io.github.gjr787878.devicereset.xposed.Identity;
 public class AppPickerActivity extends AppCompatActivity {
 
     private static final String MODULE_PKG = "io.github.gjr787878.devicereset";
-    private static final Pattern JSON_ARRAY_PATTERN = Pattern.compile("\\[([^\\[\\]]{2,3000})\\]");
+    private static final String MODULE_PKG_SHORT = "devicereset";
+    private static final Pattern JSON_ARRAY_PATTERN = Pattern.compile("\\[([^\\[\\]]{2,5000})\\]");
 
     private RecyclerView rvApps;
     private TextView tvLoading;
     private TextView tvEmpty;
     private TextView tvCount;
+    private TextView tvDebug;
     private AppAdapter adapter;
     private final List<AppItem> appList = new ArrayList<>();
+    private final StringBuilder debugLog = new StringBuilder();
 
     static class AppItem {
         String packageName;
@@ -64,6 +67,7 @@ public class AppPickerActivity extends AppCompatActivity {
         tvLoading = findViewById(R.id.tv_loading);
         tvEmpty = findViewById(R.id.tv_empty);
         tvCount = findViewById(R.id.tv_count);
+        tvDebug = findViewById(R.id.tv_debug);
         rvApps = findViewById(R.id.rv_apps);
         rvApps.setLayoutManager(new LinearLayoutManager(this));
         adapter = new AppAdapter();
@@ -73,15 +77,23 @@ public class AppPickerActivity extends AppCompatActivity {
         loadApps();
     }
 
+    private void log(String msg) {
+        debugLog.append(msg).append("\n");
+    }
+
     private void loadApps() {
+        debugLog.setLength(0);
         new Thread(() -> {
-            // 1. 从 LSPosed 配置读取作用域（原始字节扫描，不依赖表结构）
+            // 1. 从 LSPosed 配置读取作用域
             Set<String> scopePkgs = readLSPosedScope();
-            // 2. 扫描有哨兵文件的应用（有伪装值），排除模块自身
+            log("作用域读取结果: " + scopePkgs.size() + " 个 -> " + scopePkgs);
+
+            // 2. 扫描有哨兵文件的应用
             Set<String> identityPkgs = scanIdentityPackages();
             identityPkgs.remove(MODULE_PKG);
+            log("哨兵文件应用: " + identityPkgs.size() + " 个 -> " + identityPkgs);
 
-            // 合并：作用域中的应用 + 有伪装值的应用
+            // 合并
             Set<String> allPkgs = new HashSet<>();
             allPkgs.addAll(scopePkgs);
             allPkgs.addAll(identityPkgs);
@@ -104,147 +116,232 @@ public class AppPickerActivity extends AppCompatActivity {
                 } catch (Throwable ignored) {}
             }
 
-            // 排序：有伪装值的排前面
             items.sort((a, b) -> {
                 if (a.hasIdentity != b.hasIdentity) return a.hasIdentity ? -1 : 1;
                 return a.appName.compareToIgnoreCase(b.appName);
             });
 
+            final List<AppItem> finalItems = items;
             runOnUiThread(() -> {
                 tvLoading.setVisibility(View.GONE);
                 appList.clear();
-                appList.addAll(items);
+                appList.addAll(finalItems);
                 adapter.notifyDataSetChanged();
-                if (items.isEmpty()) {
+                if (finalItems.isEmpty()) {
                     tvEmpty.setVisibility(View.VISIBLE);
                     tvEmpty.setText("未找到作用域应用。\n请在 LSPosed 中勾选目标应用并重启。");
+                    tvDebug.setText(debugLog.toString());
+                    tvDebug.setVisibility(View.VISIBLE);
                     rvApps.setVisibility(View.GONE);
                 } else {
                     tvEmpty.setVisibility(View.GONE);
+                    tvDebug.setVisibility(View.GONE);
                     rvApps.setVisibility(View.VISIBLE);
                     int withVal = 0;
-                    for (AppItem i : items) if (i.hasIdentity) withVal++;
-                    tvCount.setText(items.size() + " 个应用 · " + withVal + " 个有伪装值");
+                    for (AppItem i : finalItems) if (i.hasIdentity) withVal++;
+                    tvCount.setText(finalItems.size() + " 个应用 · " + withVal + " 个有伪装值");
                 }
             });
         }).start();
     }
 
-    // ==================== LSPosed 作用域读取 ====================
+    // ==================== LSPosed 作用域读取（多策略） ====================
 
-    /** 从 LSPosed 配置数据库读取模块作用域 */
     private Set<String> readLSPosedScope() {
         Set<String> result = new HashSet<>();
-        try {
-            List<String> dbPaths = findLSPosedDbPaths();
-            if (dbPaths.isEmpty()) return result;
+        List<String> dbPaths = findLSPosedDbPaths();
+        log("找到配置文件: " + dbPaths);
 
-            for (String path : dbPaths) {
-                // 方式1：复制数据库后用 SQLite 精确查询
-                Set<String> viaSqlite = readScopeViaSQLite(path);
-                if (!viaSqlite.isEmpty()) {
-                    result.addAll(viaSqlite);
-                    break;
-                }
-                // 方式2：原始字节扫描，只在模块包名附近找 JSON 数组
-                Set<String> viaRaw = readScopeViaRawScan(path);
-                if (!viaRaw.isEmpty()) {
-                    result.addAll(viaRaw);
-                    break;
-                }
+        for (String path : dbPaths) {
+            // 策略1: sqlite3 CLI
+            Set<String> r1 = readScopeViaSqlite3(path);
+            if (!r1.isEmpty()) {
+                log("[sqlite3] 成功从 " + path + " 读取: " + r1);
+                result.addAll(r1);
+                break;
             }
-        } catch (Throwable ignored) {}
+            // 策略2: SQLiteDatabase（复制db+wal+shm）
+            Set<String> r2 = readScopeViaSQLite(path);
+            if (!r2.isEmpty()) {
+                log("[SQLite] 成功从 " + path + " 读取: " + r2);
+                result.addAll(r2);
+                break;
+            }
+            // 策略3: 原始字节扫描（db + wal）
+            Set<String> r3 = readScopeViaRaw(path);
+            if (!r3.isEmpty()) {
+                log("[Raw] 成功从 " + path + " 读取: " + r3);
+                result.addAll(r3);
+                break;
+            }
+        }
         result.remove(MODULE_PKG);
         return result;
     }
 
-    /** 方式1：复制数据库，SQLite 精确查询本模块作用域 */
-    private Set<String> readScopeViaSQLite(String dbPath) {
+    /** 策略1: sqlite3 命令行直接查询 */
+    private Set<String> readScopeViaSqlite3(String dbPath) {
         Set<String> result = new HashSet<>();
-        File tmpDb = null;
         try {
-            tmpDb = new File(getCacheDir(), "lspd_db_" + System.currentTimeMillis());
-            // 用 cat 重定向复制（比 cp 更不容易被 SELinux 拦截）
-            Process su = Runtime.getRuntime().exec("su");
-            java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
-            os.writeBytes("cat '" + dbPath + "' > '" + tmpDb.getAbsolutePath() + "'\n");
-            os.writeBytes("chmod 666 '" + tmpDb.getAbsolutePath() + "'\n");
-            os.writeBytes("exit\n");
-            os.flush();
-            su.waitFor();
-
-            if (!tmpDb.exists() || tmpDb.length() < 100) return result;
-
-            SQLiteDatabase db = SQLiteDatabase.openDatabase(
-                    tmpDb.getAbsolutePath(), null, SQLiteDatabase.OPEN_READONLY);
-
-            // 先列出所有表，找到包含 scope 的表
-            Cursor tablesCursor = db.rawQuery(
-                    "SELECT name FROM sqlite_master WHERE type='table'", null);
-            List<String> tables = new ArrayList<>();
-            while (tablesCursor.moveToNext()) {
-                tables.add(tablesCursor.getString(0));
-            }
-            tablesCursor.close();
-
-            for (String table : tables) {
-                try {
-                    // 查该表所有列名
-                    Cursor colCursor = db.rawQuery("PRAGMA table_info(" + table + ")", null);
-                    String pkgCol = null, scopeCol = null;
-                    while (colCursor.moveToNext()) {
-                        String colName = colCursor.getString(1).toLowerCase();
-                        if (colName.contains("pkg") || colName.contains("package")) pkgCol = colCursor.getString(1);
-                        if (colName.contains("scope")) scopeCol = colCursor.getString(1);
-                    }
-                    colCursor.close();
-
-                    if (pkgCol != null && scopeCol != null) {
-                        Cursor cursor = db.rawQuery(
-                                "SELECT " + scopeCol + " FROM " + table + " WHERE " + pkgCol + "=?",
-                                new String[]{MODULE_PKG});
-                        if (cursor.moveToFirst()) {
-                            String scopeJson = cursor.getString(0);
-                            if (scopeJson != null) {
-                                JSONArray arr = new JSONArray(scopeJson);
-                                for (int i = 0; i < arr.length(); i++) {
-                                    String pkg = arr.getString(i);
-                                    if (isValidPackageName(pkg)) result.add(pkg);
-                                }
+            String[] cmds = {
+                    "sqlite3 '" + dbPath + "' \"SELECT scope FROM modules WHERE module_pkg_name='" + MODULE_PKG + "'\"",
+                    "sqlite3 '" + dbPath + "' \"SELECT scope FROM modules WHERE module_pkg_name LIKE '%" + MODULE_PKG_SHORT + "%'\"",
+            };
+            for (String cmd : cmds) {
+                Process su = Runtime.getRuntime().exec("su");
+                java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
+                os.writeBytes(cmd + "\n");
+                os.writeBytes("exit\n");
+                os.flush();
+                java.io.BufferedReader reader = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(su.getInputStream()));
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    line = line.trim();
+                    if (line.startsWith("[")) {
+                        try {
+                            JSONArray arr = new JSONArray(line);
+                            for (int i = 0; i < arr.length(); i++) {
+                                String pkg = arr.getString(i);
+                                if (isValidPackageName(pkg)) result.add(pkg);
                             }
-                        }
-                        cursor.close();
-                        if (!result.isEmpty()) {
-                            db.close();
-                            return result;
-                        }
+                        } catch (Throwable ignored) {}
                     }
-                } catch (Throwable ignored) {}
+                }
+                reader.close();
+                su.waitFor();
+                if (!result.isEmpty()) return result;
             }
-            db.close();
-        } catch (Throwable ignored) {
-        } finally {
-            if (tmpDb != null && tmpDb.exists()) tmpDb.delete();
+        } catch (Throwable e) {
+            log("[sqlite3] 失败: " + e.getMessage());
         }
         return result;
     }
 
-    /** 方式2：原始字节扫描，只在模块包名附近找 JSON 数组 */
-    private Set<String> readScopeViaRawScan(String dbPath) {
+    /** 策略2: 复制数据库（含WAL），SQLiteDatabase 查询 */
+    private Set<String> readScopeViaSQLite(String dbPath) {
+        Set<String> result = new HashSet<>();
+        File tmpDb = null;
+        try {
+            String base = getCacheDir().getAbsolutePath() + "/lspd_db";
+            tmpDb = new File(base);
+            // 复制主文件 + wal + shm
+            Process su = Runtime.getRuntime().exec("su");
+            java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
+            os.writeBytes("cat '" + dbPath + "' > '" + base + "'\n");
+            os.writeBytes("cat '" + dbPath + "-wal' > '" + base + "-wal' 2>/dev/null\n");
+            os.writeBytes("cat '" + dbPath + "-shm' > '" + base + "-shm' 2>/dev/null\n");
+            os.writeBytes("chmod 666 '" + base + "' '" + base + "-wal' '" + base + "-shm' 2>/dev/null\n");
+            os.writeBytes("exit\n");
+            os.flush();
+            su.waitFor();
+
+            if (!tmpDb.exists() || tmpDb.length() < 100) {
+                log("[SQLite] 文件复制失败或太小: " + tmpDb.length());
+                return result;
+            }
+
+            SQLiteDatabase db = SQLiteDatabase.openDatabase(
+                    base, null, SQLiteDatabase.OPEN_READONLY);
+
+            // 列出所有表
+            Cursor tc = db.rawQuery("SELECT name FROM sqlite_master WHERE type='table'", null);
+            List<String> tables = new ArrayList<>();
+            while (tc.moveToNext()) tables.add(tc.getString(0));
+            tc.close();
+            log("[SQLite] 表: " + tables);
+
+            for (String table : tables) {
+                try {
+                    Cursor cc = db.rawQuery("PRAGMA table_info(" + table + ")", null);
+                    String pkgCol = null, scopeCol = null;
+                    List<String> cols = new ArrayList<>();
+                    while (cc.moveToNext()) {
+                        String cn = cc.getString(1);
+                        cols.add(cn);
+                        String cnl = cn.toLowerCase();
+                        if (cnl.contains("pkg") || cnl.contains("package")) pkgCol = cn;
+                        if (cnl.contains("scope")) scopeCol = cn;
+                    }
+                    cc.close();
+                    log("[SQLite] 表 " + table + " 列: " + cols + " pkgCol=" + pkgCol + " scopeCol=" + scopeCol);
+
+                    if (pkgCol != null && scopeCol != null) {
+                        // 先精确匹配，再模糊匹配
+                        String[] queries = {
+                                "SELECT " + scopeCol + " FROM " + table + " WHERE " + pkgCol + "=?",
+                                "SELECT " + scopeCol + " FROM " + table + " WHERE " + pkgCol + " LIKE ?",
+                        };
+                        String[][] args = {
+                                {MODULE_PKG},
+                                {"%" + MODULE_PKG_SHORT + "%"},
+                        };
+                        for (int qi = 0; qi < queries.length; qi++) {
+                            Cursor cursor = db.rawQuery(queries[qi], args[qi]);
+                            while (cursor.moveToNext()) {
+                                String scopeJson = cursor.getString(0);
+                                if (scopeJson != null && scopeJson.startsWith("[")) {
+                                    JSONArray arr = new JSONArray(scopeJson);
+                                    for (int i = 0; i < arr.length(); i++) {
+                                        String pkg = arr.getString(i);
+                                        if (isValidPackageName(pkg)) result.add(pkg);
+                                    }
+                                }
+                            }
+                            cursor.close();
+                            if (!result.isEmpty()) {
+                                db.close();
+                                return result;
+                            }
+                        }
+                    }
+                } catch (Throwable e) {
+                    log("[SQLite] 表 " + table + " 出错: " + e.getMessage());
+                }
+            }
+            db.close();
+        } catch (Throwable e) {
+            log("[SQLite] 失败: " + e.getMessage());
+        } finally {
+            if (tmpDb != null) {
+                tmpDb.delete();
+                new File(tmpDb.getAbsolutePath() + "-wal").delete();
+                new File(tmpDb.getAbsolutePath() + "-shm").delete();
+            }
+        }
+        return result;
+    }
+
+    /** 策略3: 原始字节扫描（db + wal，全文件搜索模块名附近的JSON数组） */
+    private Set<String> readScopeViaRaw(String dbPath) {
         Set<String> result = new HashSet<>();
         try {
-            byte[] data = readFileViaRoot(dbPath);
-            if (data == null || data.length == 0) return result;
+            // 读取主文件和 wal 文件，合并
+            byte[] mainData = readFileViaRoot(dbPath);
+            byte[] walData = readFileViaRoot(dbPath + "-wal");
+            log("[Raw] 主文件大小: " + (mainData == null ? 0 : mainData.length)
+                    + " wal大小: " + (walData == null ? 0 : walData.length));
 
-            String text = new String(data, StandardCharsets.UTF_8);
-            // 找到模块包名在文件中的位置
-            int pkgIdx = text.indexOf(MODULE_PKG);
+            String combined = "";
+            if (mainData != null) combined += new String(mainData, StandardCharsets.UTF_8);
+            if (walData != null) combined += new String(walData, StandardCharsets.UTF_8);
+            if (combined.isEmpty()) return result;
+
+            // 搜索模块名（精确和模糊）
+            int pkgIdx = combined.indexOf(MODULE_PKG);
+            if (pkgIdx < 0) {
+                pkgIdx = combined.indexOf(MODULE_PKG_SHORT);
+                log("[Raw] 精确包名未找到，用模糊名 '" + MODULE_PKG_SHORT + "' 位置=" + pkgIdx);
+            } else {
+                log("[Raw] 找到精确包名，位置=" + pkgIdx);
+            }
             if (pkgIdx < 0) return result;
 
-            // 在模块包名前后 8192 字节范围内找 JSON 数组
-            int start = Math.max(0, pkgIdx - 8192);
-            int end = Math.min(text.length(), pkgIdx + 8192);
-            String window = text.substring(start, end);
+            // 在模块名前后各 64KB 范围内找 JSON 数组
+            int start = Math.max(0, pkgIdx - 65536);
+            int end = Math.min(combined.length(), pkgIdx + 65536);
+            String window = combined.substring(start, end);
+            log("[Raw] 搜索窗口大小: " + window.length());
 
             Matcher m = JSON_ARRAY_PATTERN.matcher(window);
             while (m.find()) {
@@ -258,22 +355,23 @@ public class AppPickerActivity extends AppCompatActivity {
                     }
                 } catch (Throwable ignored) {}
             }
-        } catch (Throwable ignored) {}
+            log("[Raw] 找到包名: " + result);
+        } catch (Throwable e) {
+            log("[Raw] 失败: " + e.getMessage());
+        }
         return result;
     }
 
     /** 查找 LSPosed 配置数据库路径 */
     private List<String> findLSPosedDbPaths() {
         List<String> paths = new ArrayList<>();
-        // 已知路径
         String[] known = {
                 "/data/adb/lspd/config/db",
                 "/data/adb/lspd/config/modules_config.db",
-                "/data/adb/lspd/config/lspd.db",
         };
         for (String p : known) paths.add(p);
 
-        // 列出 /data/adb/lspd/config/ 目录，找所有文件
+        // 列出目录
         try {
             Process su = Runtime.getRuntime().exec("su");
             java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
@@ -285,7 +383,7 @@ public class AppPickerActivity extends AppCompatActivity {
             String line;
             while ((line = reader.readLine()) != null) {
                 line = line.trim();
-                if (!line.isEmpty()) {
+                if (!line.isEmpty() && !line.endsWith("-wal") && !line.endsWith("-shm")) {
                     String full = "/data/adb/lspd/config/" + line;
                     if (!paths.contains(full)) paths.add(full);
                 }
@@ -293,25 +391,6 @@ public class AppPickerActivity extends AppCompatActivity {
             reader.close();
             su.waitFor();
         } catch (Throwable ignored) {}
-
-        // 也试试 /data/adb/lspd/ 下其他子目录
-        try {
-            Process su = Runtime.getRuntime().exec("su");
-            java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
-            os.writeBytes("find /data/adb/lspd -maxdepth 2 -type f 2>/dev/null\n");
-            os.writeBytes("exit\n");
-            os.flush();
-            java.io.BufferedReader reader = new java.io.BufferedReader(
-                    new java.io.InputStreamReader(su.getInputStream()));
-            String line;
-            while ((line = reader.readLine()) != null) {
-                line = line.trim();
-                if (!line.isEmpty() && !paths.contains(line)) paths.add(line);
-            }
-            reader.close();
-            su.waitFor();
-        } catch (Throwable ignored) {}
-
         return paths;
     }
 
@@ -320,7 +399,7 @@ public class AppPickerActivity extends AppCompatActivity {
         try {
             Process su = Runtime.getRuntime().exec("su");
             java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
-            os.writeBytes("cat '" + path + "'\n");
+            os.writeBytes("cat '" + path + "' 2>/dev/null\n");
             os.writeBytes("exit\n");
             os.flush();
             InputStream is = su.getInputStream();
@@ -331,11 +410,6 @@ public class AppPickerActivity extends AppCompatActivity {
             is.close();
             su.waitFor();
             byte[] data = baos.toByteArray();
-            // SQLite 文件头是 "SQLite format 3\0"，验证一下
-            if (data.length > 16 && new String(data, 0, 13, StandardCharsets.UTF_8).equals("SQLite format")) {
-                return data;
-            }
-            // 不是 SQLite 也返回，可能是其他格式
             return data.length > 0 ? data : null;
         } catch (Throwable ignored) {}
         return null;
@@ -344,17 +418,14 @@ public class AppPickerActivity extends AppCompatActivity {
     /** 检查是否为合法 Android 包名 */
     private boolean isValidPackageName(String pkg) {
         if (pkg == null || pkg.length() < 3) return false;
-        // 包名必须包含至少一个点，且只含字母数字下划线点
         if (!pkg.contains(".")) return false;
         if (!pkg.matches("[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z0-9_]+)+")) return false;
-        // 排除常见的非应用包名
         if (pkg.equals("android") || pkg.startsWith("android.")) return false;
         return true;
     }
 
-    // ==================== 哨兵文件扫描 ====================
+    // ==================== 哨兵文件 ====================
 
-    /** 扫描所有有 .identity_sentinel 文件的应用 */
     private Set<String> scanIdentityPackages() {
         Set<String> result = new HashSet<>();
         try {
@@ -376,7 +447,6 @@ public class AppPickerActivity extends AppCompatActivity {
         return result;
     }
 
-    /** 读取目标应用的哨兵文件 */
     private String readIdentityFile(String packageName) {
         try {
             String path = "/data/data/" + packageName + "/files/.identity_sentinel";

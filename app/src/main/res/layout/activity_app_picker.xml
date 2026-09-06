@@ -1,60 +1,77 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:background="#000000">
+    android:background="#000000"
+    android:fillViewport="true">
 
-    <!-- 顶部计数栏 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical|end"
-        android:paddingStart="16dp"
-        android:paddingEnd="16dp"
-        android:paddingTop="12dp"
-        android:paddingBottom="8dp">
+        android:orientation="vertical">
 
-        <TextView
-            android:id="@+id/tv_count"
-            android:layout_width="wrap_content"
+        <!-- 顶部计数栏 -->
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:textSize="13sp"
-            android:textColor="#888888"/>
+            android:orientation="horizontal"
+            android:gravity="center_vertical|end"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:paddingTop="12dp"
+            android:paddingBottom="8dp">
+
+            <TextView
+                android:id="@+id/tv_count"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="13sp"
+                android:textColor="#888888"/>
+        </LinearLayout>
+
+        <!-- 加载提示 -->
+        <TextView
+            android:id="@+id/tv_loading"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="正在扫描..."
+            android:textSize="14sp"
+            android:textColor="#888888"
+            android:gravity="center"
+            android:padding="24dp"/>
+
+        <!-- 空提示 -->
+        <TextView
+            android:id="@+id/tv_empty"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="未找到应用"
+            android:textSize="14sp"
+            android:textColor="#666666"
+            android:gravity="center"
+            android:padding="32dp"
+            android:lineSpacingExtra="4dp"
+            android:visibility="gone"/>
+
+        <!-- 诊断信息（仅在失败时显示） -->
+        <TextView
+            android:id="@+id/tv_debug"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="11sp"
+            android:textColor="#555555"
+            android:padding="16dp"
+            android:fontFamily="monospace"
+            android:visibility="gone"/>
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/rv_apps"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:paddingBottom="16dp"
+            android:visibility="gone"/>
+
     </LinearLayout>
-
-    <!-- 加载提示 -->
-    <TextView
-        android:id="@+id/tv_loading"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="正在扫描..."
-        android:textSize="14sp"
-        android:textColor="#888888"
-        android:gravity="center"
-        android:padding="24dp"/>
-
-    <!-- 空提示 -->
-    <TextView
-        android:id="@+id/tv_empty"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="未找到应用"
-        android:textSize="14sp"
-        android:textColor="#666666"
-        android:gravity="center"
-        android:padding="32dp"
-        android:lineSpacingExtra="4dp"
-        android:visibility="gone"/>
-
-    <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/rv_apps"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:paddingStart="16dp"
-        android:paddingEnd="16dp"
-        android:paddingBottom="16dp"
-        android:visibility="gone"/>
-
-</LinearLayout>
+</ScrollView>
