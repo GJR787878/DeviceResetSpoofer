@@ -92,6 +92,7 @@ public class ConfigActivity extends AppCompatActivity {
         tvMac = findViewById(R.id.tv_mac);
         tvGsf = findViewById(R.id.tv_gsf);
         tvCarrier = findViewById(R.id.tv_carrier);
+        TextView tvShowIdentity = findViewById(R.id.tv_show_identity);
         TextView tvFooter = findViewById(R.id.tv_footer);
 
         if (isZh) {
@@ -105,6 +106,7 @@ public class ConfigActivity extends AppCompatActivity {
             tvMac.setText("伪装 MAC地址");
             tvGsf.setText("伪装 GSF ID");
             tvCarrier.setText("伪装 运营商信息");
+            tvShowIdentity.setText("显示当前伪装值");
             tvFooter.setText("右上角菜单可手动重置身份。\n排查问题：LSPosed → 日志 → 搜索「DeviceReset」");
         } else if (isEn) {
             tvScopeTitle.setText("ℹ️ Scope");
@@ -117,6 +119,7 @@ public class ConfigActivity extends AppCompatActivity {
             tvMac.setText("Spoof MAC Address");
             tvGsf.setText("Spoof GSF ID");
             tvCarrier.setText("Spoof Carrier Info");
+            tvShowIdentity.setText("View Current Identity");
             tvFooter.setText("Manually reset identity from top-right menu.\nTroubleshooting: LSPosed → Logs → Search \"DeviceReset\"");
         } else {
             tvScopeTitle.setText("ℹ️ Область");
@@ -129,6 +132,7 @@ public class ConfigActivity extends AppCompatActivity {
             tvMac.setText("Подмена MAC-адрес");
             tvGsf.setText("Подмена GSF ID");
             tvCarrier.setText("Подмена информации об операторе");
+            tvShowIdentity.setText("Просмотр текущей подмены");
             tvFooter.setText("Ручной сброс идентичности из меню в правом верхнем углу.\nУстранение неполадок: LSPosed → Журналы → Поиск «DeviceReset»");
         }
     }
