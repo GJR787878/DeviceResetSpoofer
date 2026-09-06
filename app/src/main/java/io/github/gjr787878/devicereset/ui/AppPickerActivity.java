@@ -3,6 +3,9 @@ package io.github.gjr787878.devicereset.ui;
 import android.app.AlertDialog;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.database.Cursor;
+import android.database.sqlite.SQLiteDatabase;
+import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.Drawable;
 import android.os.Bundle;
 import android.view.LayoutInflater;
@@ -19,6 +22,7 @@ import androidx.recyclerview.widget.RecyclerView;
 import org.json.JSONArray;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -126,48 +130,135 @@ public class AppPickerActivity extends AppCompatActivity {
         }).start();
     }
 
-    // ==================== LSPosed 作用域读取（原始字节扫描） ====================
+    // ==================== LSPosed 作用域读取 ====================
 
-    /** 从 LSPosed 配置数据库读取模块作用域，直接扫描原始字节中的 JSON 数组 */
+    /** 从 LSPosed 配置数据库读取模块作用域 */
     private Set<String> readLSPosedScope() {
         Set<String> result = new HashSet<>();
         try {
-            // 1. 找出所有可能的 LSPosed 配置数据库路径
             List<String> dbPaths = findLSPosedDbPaths();
             if (dbPaths.isEmpty()) return result;
 
-            // 2. 对每个数据库，读取原始字节并扫描 JSON 数组
             for (String path : dbPaths) {
-                byte[] data = readFileViaRoot(path);
-                if (data == null || data.length == 0) continue;
-
-                // SQLite 中文本以 UTF-8 明文存储，直接转字符串扫描
-                String text = new String(data, StandardCharsets.UTF_8);
-                Matcher m = JSON_ARRAY_PATTERN.matcher(text);
-                while (m.find()) {
-                    String jsonStr = "[" + m.group(1) + "]";
-                    try {
-                        JSONArray arr = new JSONArray(jsonStr);
-                        if (arr.length() == 0) continue;
-                        // 检查是否为包名数组（至少一个元素是合法包名）
-                        boolean hasValidPkg = false;
-                        List<String> pkgs = new ArrayList<>();
-                        for (int i = 0; i < arr.length(); i++) {
-                            String pkg = arr.optString(i, "");
-                            if (isValidPackageName(pkg)) {
-                                hasValidPkg = true;
-                                pkgs.add(pkg);
-                            }
-                        }
-                        if (hasValidPkg) {
-                            result.addAll(pkgs);
-                        }
-                    } catch (Throwable ignored) {}
+                // 方式1：复制数据库后用 SQLite 精确查询
+                Set<String> viaSqlite = readScopeViaSQLite(path);
+                if (!viaSqlite.isEmpty()) {
+                    result.addAll(viaSqlite);
+                    break;
                 }
-                if (!result.isEmpty()) break;
+                // 方式2：原始字节扫描，只在模块包名附近找 JSON 数组
+                Set<String> viaRaw = readScopeViaRawScan(path);
+                if (!viaRaw.isEmpty()) {
+                    result.addAll(viaRaw);
+                    break;
+                }
             }
         } catch (Throwable ignored) {}
         result.remove(MODULE_PKG);
+        return result;
+    }
+
+    /** 方式1：复制数据库，SQLite 精确查询本模块作用域 */
+    private Set<String> readScopeViaSQLite(String dbPath) {
+        Set<String> result = new HashSet<>();
+        File tmpDb = null;
+        try {
+            tmpDb = new File(getCacheDir(), "lspd_db_" + System.currentTimeMillis());
+            // 用 cat 重定向复制（比 cp 更不容易被 SELinux 拦截）
+            Process su = Runtime.getRuntime().exec("su");
+            java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
+            os.writeBytes("cat '" + dbPath + "' > '" + tmpDb.getAbsolutePath() + "'\n");
+            os.writeBytes("chmod 666 '" + tmpDb.getAbsolutePath() + "'\n");
+            os.writeBytes("exit\n");
+            os.flush();
+            su.waitFor();
+
+            if (!tmpDb.exists() || tmpDb.length() < 100) return result;
+
+            SQLiteDatabase db = SQLiteDatabase.openDatabase(
+                    tmpDb.getAbsolutePath(), null, SQLiteDatabase.OPEN_READONLY);
+
+            // 先列出所有表，找到包含 scope 的表
+            Cursor tablesCursor = db.rawQuery(
+                    "SELECT name FROM sqlite_master WHERE type='table'", null);
+            List<String> tables = new ArrayList<>();
+            while (tablesCursor.moveToNext()) {
+                tables.add(tablesCursor.getString(0));
+            }
+            tablesCursor.close();
+
+            for (String table : tables) {
+                try {
+                    // 查该表所有列名
+                    Cursor colCursor = db.rawQuery("PRAGMA table_info(" + table + ")", null);
+                    String pkgCol = null, scopeCol = null;
+                    while (colCursor.moveToNext()) {
+                        String colName = colCursor.getString(1).toLowerCase();
+                        if (colName.contains("pkg") || colName.contains("package")) pkgCol = colCursor.getString(1);
+                        if (colName.contains("scope")) scopeCol = colCursor.getString(1);
+                    }
+                    colCursor.close();
+
+                    if (pkgCol != null && scopeCol != null) {
+                        Cursor cursor = db.rawQuery(
+                                "SELECT " + scopeCol + " FROM " + table + " WHERE " + pkgCol + "=?",
+                                new String[]{MODULE_PKG});
+                        if (cursor.moveToFirst()) {
+                            String scopeJson = cursor.getString(0);
+                            if (scopeJson != null) {
+                                JSONArray arr = new JSONArray(scopeJson);
+                                for (int i = 0; i < arr.length(); i++) {
+                                    String pkg = arr.getString(i);
+                                    if (isValidPackageName(pkg)) result.add(pkg);
+                                }
+                            }
+                        }
+                        cursor.close();
+                        if (!result.isEmpty()) {
+                            db.close();
+                            return result;
+                        }
+                    }
+                } catch (Throwable ignored) {}
+            }
+            db.close();
+        } catch (Throwable ignored) {
+        } finally {
+            if (tmpDb != null && tmpDb.exists()) tmpDb.delete();
+        }
+        return result;
+    }
+
+    /** 方式2：原始字节扫描，只在模块包名附近找 JSON 数组 */
+    private Set<String> readScopeViaRawScan(String dbPath) {
+        Set<String> result = new HashSet<>();
+        try {
+            byte[] data = readFileViaRoot(dbPath);
+            if (data == null || data.length == 0) return result;
+
+            String text = new String(data, StandardCharsets.UTF_8);
+            // 找到模块包名在文件中的位置
+            int pkgIdx = text.indexOf(MODULE_PKG);
+            if (pkgIdx < 0) return result;
+
+            // 在模块包名前后 8192 字节范围内找 JSON 数组
+            int start = Math.max(0, pkgIdx - 8192);
+            int end = Math.min(text.length(), pkgIdx + 8192);
+            String window = text.substring(start, end);
+
+            Matcher m = JSON_ARRAY_PATTERN.matcher(window);
+            while (m.find()) {
+                String jsonStr = "[" + m.group(1) + "]";
+                try {
+                    JSONArray arr = new JSONArray(jsonStr);
+                    if (arr.length() == 0) continue;
+                    for (int i = 0; i < arr.length(); i++) {
+                        String pkg = arr.optString(i, "");
+                        if (isValidPackageName(pkg)) result.add(pkg);
+                    }
+                } catch (Throwable ignored) {}
+            }
+        } catch (Throwable ignored) {}
         return result;
     }
 
@@ -372,7 +463,10 @@ public class AppPickerActivity extends AppCompatActivity {
             if (item.hasIdentity) {
                 holder.dot.setBackgroundResource(R.drawable.status_dot);
             } else {
-                holder.dot.setBackgroundColor(0xFF444444);
+                GradientDrawable grayDot = new GradientDrawable();
+                grayDot.setShape(GradientDrawable.OVAL);
+                grayDot.setColor(0xFF444444);
+                holder.dot.setBackground(grayDot);
             }
             holder.itemView.setOnClickListener(v -> showIdentityDialog(item));
         }
