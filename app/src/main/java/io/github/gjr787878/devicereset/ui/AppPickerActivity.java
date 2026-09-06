@@ -183,9 +183,11 @@ public class AppPickerActivity extends AppCompatActivity {
     private Set<String> readScopeViaSqlite3(String dbPath) {
         Set<String> result = new HashSet<>();
         try {
+            // scope 表（每行一个应用）和 modules 表（scope 为 JSON 数组）两种格式都试
             String[] cmds = {
+                    "sqlite3 '" + dbPath + "' \"SELECT app_pkg_name FROM scope WHERE module_pkg_name='" + MODULE_PKG + "'\"",
+                    "sqlite3 '" + dbPath + "' SELECT app_pkg_name FROM scope WHERE module_pkg_name LIKE '%" + MODULE_PKG_SHORT + "%'",
                     "sqlite3 '" + dbPath + "' \"SELECT scope FROM modules WHERE module_pkg_name='" + MODULE_PKG + "'\"",
-                    "sqlite3 '" + dbPath + "' \"SELECT scope FROM modules WHERE module_pkg_name LIKE '%" + MODULE_PKG_SHORT + "%'\"",
             };
             for (String cmd : cmds) {
                 Process su = Runtime.getRuntime().exec("su");
@@ -198,6 +200,7 @@ public class AppPickerActivity extends AppCompatActivity {
                 String line;
                 while ((line = reader.readLine()) != null) {
                     line = line.trim();
+                    if (line.isEmpty()) continue;
                     if (line.startsWith("[")) {
                         try {
                             JSONArray arr = new JSONArray(line);
@@ -206,11 +209,16 @@ public class AppPickerActivity extends AppCompatActivity {
                                 if (isValidPackageName(pkg)) result.add(pkg);
                             }
                         } catch (Throwable ignored) {}
+                    } else if (isValidPackageName(line)) {
+                        result.add(line);
                     }
                 }
                 reader.close();
                 su.waitFor();
-                if (!result.isEmpty()) return result;
+                if (!result.isEmpty()) {
+                    log("[sqlite3] 成功: " + result);
+                    return result;
+                }
             }
         } catch (Throwable e) {
             log("[sqlite3] 失败: " + e.getMessage());
@@ -221,28 +229,36 @@ public class AppPickerActivity extends AppCompatActivity {
     /** 策略2: 复制数据库（含WAL），SQLiteDatabase 查询 */
     private Set<String> readScopeViaSQLite(String dbPath) {
         Set<String> result = new HashSet<>();
-        File tmpDb = null;
+        String tmpBase = "/data/local/tmp/drs_lspd_db";
         try {
-            String base = getCacheDir().getAbsolutePath() + "/lspd_db";
-            tmpDb = new File(base);
-            // 复制主文件 + wal + shm
+            // 用 dd 复制到 /data/local/tmp/（cat > 重定向在 su shell 中不可靠）
             Process su = Runtime.getRuntime().exec("su");
             java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
-            os.writeBytes("cat '" + dbPath + "' > '" + base + "'\n");
-            os.writeBytes("cat '" + dbPath + "-wal' > '" + base + "-wal' 2>/dev/null\n");
-            os.writeBytes("cat '" + dbPath + "-shm' > '" + base + "-shm' 2>/dev/null\n");
-            os.writeBytes("chmod 666 '" + base + "' '" + base + "-wal' '" + base + "-shm' 2>/dev/null\n");
+            os.writeBytes("dd if='" + dbPath + "' of='" + tmpBase + "' bs=65536 2>/dev/null\n");
+            os.writeBytes("dd if='" + dbPath + "-wal' of='" + tmpBase + "-wal' bs=65536 2>/dev/null\n");
+            os.writeBytes("dd if='" + dbPath + "-shm' of='" + tmpBase + "-shm' bs=65536 2>/dev/null\n");
+            os.writeBytes("chmod 666 '" + tmpBase + "' '" + tmpBase + "-wal' '" + tmpBase + "-shm' 2>/dev/null\n");
+            os.writeBytes("ls -l '" + tmpBase + "'\n");
             os.writeBytes("exit\n");
             os.flush();
+            // 读取 ls 输出确认文件大小
+            java.io.BufferedReader reader = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(su.getInputStream()));
+            StringBuilder lsOut = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) lsOut.append(line);
+            reader.close();
             su.waitFor();
+            log("[SQLite] 复制结果: " + lsOut);
 
+            File tmpDb = new File(tmpBase);
             if (!tmpDb.exists() || tmpDb.length() < 100) {
-                log("[SQLite] 文件复制失败或太小: " + tmpDb.length());
+                log("[SQLite] 文件不存在或太小: " + tmpDb.length());
                 return result;
             }
 
             SQLiteDatabase db = SQLiteDatabase.openDatabase(
-                    base, null, SQLiteDatabase.OPEN_READONLY);
+                    tmpBase, null, SQLiteDatabase.OPEN_READONLY);
 
             // 列出所有表
             Cursor tc = db.rawQuery("SELECT name FROM sqlite_master WHERE type='table'", null);
@@ -254,45 +270,70 @@ public class AppPickerActivity extends AppCompatActivity {
             for (String table : tables) {
                 try {
                     Cursor cc = db.rawQuery("PRAGMA table_info(" + table + ")", null);
-                    String pkgCol = null, scopeCol = null;
+                    String modulePkgCol = null, appPkgCol = null, scopeCol = null;
                     List<String> cols = new ArrayList<>();
                     while (cc.moveToNext()) {
                         String cn = cc.getString(1);
                         cols.add(cn);
                         String cnl = cn.toLowerCase();
-                        if (cnl.contains("pkg") || cnl.contains("package")) pkgCol = cn;
-                        if (cnl.contains("scope")) scopeCol = cn;
+                        if (cnl.equals("module_pkg_name") || cnl.equals("module_pkg")) modulePkgCol = cn;
+                        if (cnl.equals("app_pkg_name") || cnl.equals("app_pkg")) appPkgCol = cn;
+                        if (cnl.contains("scope") && !cnl.contains("blocked")) scopeCol = cn;
                     }
                     cc.close();
-                    log("[SQLite] 表 " + table + " 列: " + cols + " pkgCol=" + pkgCol + " scopeCol=" + scopeCol);
+                    log("[SQLite] 表 " + table + " 列: " + cols);
 
-                    if (pkgCol != null && scopeCol != null) {
-                        // 先精确匹配，再模糊匹配
-                        String[] queries = {
-                                "SELECT " + scopeCol + " FROM " + table + " WHERE " + pkgCol + "=?",
-                                "SELECT " + scopeCol + " FROM " + table + " WHERE " + pkgCol + " LIKE ?",
-                        };
-                        String[][] args = {
-                                {MODULE_PKG},
-                                {"%" + MODULE_PKG_SHORT + "%"},
-                        };
-                        for (int qi = 0; qi < queries.length; qi++) {
-                            Cursor cursor = db.rawQuery(queries[qi], args[qi]);
-                            while (cursor.moveToNext()) {
-                                String scopeJson = cursor.getString(0);
-                                if (scopeJson != null && scopeJson.startsWith("[")) {
-                                    JSONArray arr = new JSONArray(scopeJson);
-                                    for (int i = 0; i < arr.length(); i++) {
-                                        String pkg = arr.getString(i);
-                                        if (isValidPackageName(pkg)) result.add(pkg);
-                                    }
+                    // 情况A: scope 表（module_pkg_name + app_pkg_name，每行一个应用）
+                    if (modulePkgCol != null && appPkgCol != null) {
+                        Cursor cursor = db.rawQuery(
+                                "SELECT " + appPkgCol + " FROM " + table + " WHERE " + modulePkgCol + "=?",
+                                new String[]{MODULE_PKG});
+                        while (cursor.moveToNext()) {
+                            String pkg = cursor.getString(0);
+                            if (isValidPackageName(pkg)) result.add(pkg);
+                        }
+                        cursor.close();
+                        if (!result.isEmpty()) {
+                            log("[SQLite] 从 " + table + " 表读取: " + result);
+                            db.close();
+                            return result;
+                        }
+                        // 模糊匹配
+                        cursor = db.rawQuery(
+                                "SELECT " + appPkgCol + " FROM " + table + " WHERE " + modulePkgCol + " LIKE ?",
+                                new String[]{"%" + MODULE_PKG_SHORT + "%"});
+                        while (cursor.moveToNext()) {
+                            String pkg = cursor.getString(0);
+                            if (isValidPackageName(pkg)) result.add(pkg);
+                        }
+                        cursor.close();
+                        if (!result.isEmpty()) {
+                            log("[SQLite] 从 " + table + " 表(模糊)读取: " + result);
+                            db.close();
+                            return result;
+                        }
+                    }
+
+                    // 情况B: modules 表（scope 列为 JSON 数组）
+                    if (modulePkgCol != null && scopeCol != null) {
+                        Cursor cursor = db.rawQuery(
+                                "SELECT " + scopeCol + " FROM " + table + " WHERE " + modulePkgCol + "=?",
+                                new String[]{MODULE_PKG});
+                        while (cursor.moveToNext()) {
+                            String scopeJson = cursor.getString(0);
+                            if (scopeJson != null && scopeJson.startsWith("[")) {
+                                JSONArray arr = new JSONArray(scopeJson);
+                                for (int i = 0; i < arr.length(); i++) {
+                                    String pkg = arr.getString(i);
+                                    if (isValidPackageName(pkg)) result.add(pkg);
                                 }
                             }
-                            cursor.close();
-                            if (!result.isEmpty()) {
-                                db.close();
-                                return result;
-                            }
+                        }
+                        cursor.close();
+                        if (!result.isEmpty()) {
+                            log("[SQLite] 从 " + table + ".scope(JSON)读取: " + result);
+                            db.close();
+                            return result;
                         }
                     }
                 } catch (Throwable e) {
@@ -303,58 +344,68 @@ public class AppPickerActivity extends AppCompatActivity {
         } catch (Throwable e) {
             log("[SQLite] 失败: " + e.getMessage());
         } finally {
-            if (tmpDb != null) {
-                tmpDb.delete();
-                new File(tmpDb.getAbsolutePath() + "-wal").delete();
-                new File(tmpDb.getAbsolutePath() + "-shm").delete();
-            }
+            // 清理临时文件
+            try {
+                Process su = Runtime.getRuntime().exec("su");
+                java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
+                os.writeBytes("rm -f '" + tmpBase + "' '" + tmpBase + "-wal' '" + tmpBase + "-shm'\n");
+                os.writeBytes("exit\n");
+                os.flush();
+                su.waitFor();
+            } catch (Throwable ignored) {}
         }
         return result;
     }
 
-    /** 策略3: 原始字节扫描（db + wal，全文件搜索模块名附近的JSON数组） */
+    /** 策略3: 原始字节扫描（db + wal，模块名附近提取包名） */
     private Set<String> readScopeViaRaw(String dbPath) {
         Set<String> result = new HashSet<>();
         try {
-            // 读取主文件和 wal 文件，合并
             byte[] mainData = readFileViaRoot(dbPath);
             byte[] walData = readFileViaRoot(dbPath + "-wal");
-            log("[Raw] 主文件大小: " + (mainData == null ? 0 : mainData.length)
-                    + " wal大小: " + (walData == null ? 0 : walData.length));
+            log("[Raw] 主文件: " + (mainData == null ? 0 : mainData.length)
+                    + " wal: " + (walData == null ? 0 : walData.length));
 
             String combined = "";
             if (mainData != null) combined += new String(mainData, StandardCharsets.UTF_8);
             if (walData != null) combined += new String(walData, StandardCharsets.UTF_8);
             if (combined.isEmpty()) return result;
 
-            // 搜索模块名（精确和模糊）
+            // 搜索模块名
             int pkgIdx = combined.indexOf(MODULE_PKG);
             if (pkgIdx < 0) {
                 pkgIdx = combined.indexOf(MODULE_PKG_SHORT);
-                log("[Raw] 精确包名未找到，用模糊名 '" + MODULE_PKG_SHORT + "' 位置=" + pkgIdx);
+                log("[Raw] 用模糊名位置=" + pkgIdx);
             } else {
-                log("[Raw] 找到精确包名，位置=" + pkgIdx);
+                log("[Raw] 精确包名位置=" + pkgIdx);
             }
             if (pkgIdx < 0) return result;
 
-            // 在模块名前后各 64KB 范围内找 JSON 数组
-            int start = Math.max(0, pkgIdx - 65536);
-            int end = Math.min(combined.length(), pkgIdx + 65536);
+            // 模块名前后 128KB 窗口
+            int start = Math.max(0, pkgIdx - 131072);
+            int end = Math.min(combined.length(), pkgIdx + 131072);
             String window = combined.substring(start, end);
-            log("[Raw] 搜索窗口大小: " + window.length());
 
+            // 方式A: 找 JSON 数组（兼容旧格式）
             Matcher m = JSON_ARRAY_PATTERN.matcher(window);
             while (m.find()) {
-                String jsonStr = "[" + m.group(1) + "]";
                 try {
-                    JSONArray arr = new JSONArray(jsonStr);
-                    if (arr.length() == 0) continue;
+                    JSONArray arr = new JSONArray("[" + m.group(1) + "]");
                     for (int i = 0; i < arr.length(); i++) {
                         String pkg = arr.optString(i, "");
                         if (isValidPackageName(pkg)) result.add(pkg);
                     }
                 } catch (Throwable ignored) {}
             }
+
+            // 方式B: 直接提取窗口内所有合法包名（scope 表每行一个包名）
+            Pattern pkgPattern = Pattern.compile("[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z0-9_]+){1,5}");
+            Matcher pm = pkgPattern.matcher(window);
+            while (pm.find()) {
+                String pkg = pm.group();
+                if (isValidPackageName(pkg)) result.add(pkg);
+            }
+
             log("[Raw] 找到包名: " + result);
         } catch (Throwable e) {
             log("[Raw] 失败: " + e.getMessage());
