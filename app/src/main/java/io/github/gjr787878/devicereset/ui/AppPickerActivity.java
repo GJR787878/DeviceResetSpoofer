@@ -232,8 +232,7 @@ public class AppPickerActivity extends AppCompatActivity {
                     rvApps.setVisibility(View.GONE);
                 } else {
                     tvEmpty.setVisibility(View.GONE);
-                    tvDebug.setText(debugLog.toString());
-                    tvDebug.setVisibility(View.VISIBLE);
+                    tvDebug.setVisibility(View.GONE);
                     rvApps.setVisibility(View.VISIBLE);
                     int withVal = 0;
                     for (AppItem i : finalItems) if (i.hasIdentity) withVal++;
