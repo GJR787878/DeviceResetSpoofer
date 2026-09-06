@@ -35,6 +35,7 @@ import java.util.regex.Pattern;
 import io.github.gjr787878.devicereset.GlassButtonDrawable;
 import io.github.gjr787878.devicereset.R;
 import io.github.gjr787878.devicereset.xposed.Identity;
+import io.github.gjr787878.devicereset.xposed.IdentityGenerator;
 
 public class AppPickerActivity extends AppCompatActivity {
 
@@ -534,29 +535,119 @@ public class AppPickerActivity extends AppCompatActivity {
                 "/data/data/" + packageName + "/files/.identity_sentinel",
                 "/data/user/0/" + packageName + "/files/.identity_sentinel",
         };
+        String tmpPath = "/data/local/tmp/drs_identity_" + System.currentTimeMillis();
         for (String path : paths) {
             try {
+                // 用 dd 复制到 /data/local/tmp/（和读取 LSPosed 数据库相同的可靠方式）
                 Process su = Runtime.getRuntime().exec("su");
                 java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
-                os.writeBytes("cat '" + path + "' 2>/dev/null\n");
+                os.writeBytes("dd if='" + path + "' of='" + tmpPath + "' bs=65536 2>/dev/null\n");
+                os.writeBytes("chmod 666 '" + tmpPath + "' 2>/dev/null\n");
+                os.writeBytes("ls -l '" + tmpPath + "' 2>/dev/null\n");
                 os.writeBytes("exit\n");
                 os.flush();
+                // 读取 ls 输出确认
                 java.io.BufferedReader reader = new java.io.BufferedReader(
                         new java.io.InputStreamReader(su.getInputStream()));
-                StringBuilder sb = new StringBuilder();
+                StringBuilder lsOut = new StringBuilder();
                 String line;
-                while ((line = reader.readLine()) != null) sb.append(line);
+                while ((line = reader.readLine()) != null) lsOut.append(line);
                 reader.close();
                 su.waitFor();
-                String output = sb.toString().trim();
-                if (!output.isEmpty() && output.startsWith("{")) {
-                    log("读取到伪装值 " + packageName + " 从 " + path);
-                    return output;
+
+                File tmpFile = new File(tmpPath);
+                if (tmpFile.exists() && tmpFile.length() > 0) {
+                    byte[] data = java.nio.file.Files.readAllBytes(tmpFile.toPath());
+                    String output = new String(data, StandardCharsets.UTF_8).trim();
+                    tmpFile.delete();
+                    if (!output.isEmpty() && output.startsWith("{")) {
+                        log("读取到伪装值 " + packageName + " 从 " + path + " (" + output.length() + " bytes)");
+                        return output;
+                    }
+                } else {
+                    log("读取失败 " + packageName + " 路径=" + path + " ls=" + lsOut);
                 }
-            } catch (Throwable ignored) {}
+            } catch (Throwable e) {
+                log("读取异常 " + packageName + ": " + e.getMessage());
+            }
         }
         log("未读取到伪装值 " + packageName);
         return null;
+    }
+
+    /** 生成随机身份并写入目标应用的哨兵文件 */
+    private void generateAndWriteIdentity(AppItem item) {
+        new Thread(() -> {
+            try {
+                Identity identity = IdentityGenerator.generateRandom();
+                String json = identity.toJson();
+                boolean ok = writeIdentityFile(item.packageName, json);
+                if (ok) {
+                    item.identityJson = json;
+                    item.hasIdentity = true;
+                    runOnUiThread(() -> {
+                        adapter.notifyDataSetChanged();
+                        showIdentityDialog(item);
+                    });
+                } else {
+                    runOnUiThread(() -> new AlertDialog.Builder(this)
+                            .setTitle("写入失败")
+                            .setMessage("无法写入伪装值到目标应用目录。\n请确保已授予 Root 权限。")
+                            .setPositiveButton("确定", null)
+                            .show());
+                }
+            } catch (Throwable e) {
+                log("生成身份异常: " + e.getMessage());
+            }
+        }).start();
+    }
+
+    /** 通过 root 将身份 JSON 写入目标应用的哨兵文件 */
+    private boolean writeIdentityFile(String packageName, String json) {
+        String[] dirs = {
+                "/data/data/" + packageName + "/files",
+                "/data/user/0/" + packageName + "/files",
+        };
+        // 先写到临时文件
+        String tmpPath = null;
+        try {
+            File tmpFile = new File(getCacheDir(), "drs_write_" + System.currentTimeMillis() + ".json");
+            java.nio.file.Files.write(tmpFile.toPath(), json.getBytes(StandardCharsets.UTF_8));
+            tmpPath = tmpFile.getAbsolutePath();
+
+            for (String dir : dirs) {
+                try {
+                    Process su = Runtime.getRuntime().exec("su");
+                    java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
+                    os.writeBytes("mkdir -p '" + dir + "'\n");
+                    os.writeBytes("cp '" + tmpPath + "' '" + dir + "/.identity_sentinel'\n");
+                    os.writeBytes("chmod 666 '" + dir + "/.identity_sentinel'\n");
+                    os.writeBytes("ls -l '" + dir + "/.identity_sentinel'\n");
+                    os.writeBytes("exit\n");
+                    os.flush();
+                    java.io.BufferedReader reader = new java.io.BufferedReader(
+                            new java.io.InputStreamReader(su.getInputStream()));
+                    StringBuilder out = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) out.append(line);
+                    reader.close();
+                    su.waitFor();
+                    log("写入结果 " + dir + ": " + out);
+                    // 验证
+                    String verify = readIdentityFile(packageName);
+                    if (verify != null) {
+                        tmpFile.delete();
+                        return true;
+                    }
+                } catch (Throwable e) {
+                    log("写入异常 " + dir + ": " + e.getMessage());
+                }
+            }
+            if (tmpPath != null) new File(tmpPath).delete();
+        } catch (Throwable e) {
+            log("写入身份异常: " + e.getMessage());
+        }
+        return false;
     }
 
     private void showIdentityDialog(AppItem item) {
@@ -570,8 +661,9 @@ public class AppPickerActivity extends AppCompatActivity {
         if (json == null) {
             new AlertDialog.Builder(this)
                     .setTitle(item.appName)
-                    .setMessage("该应用暂无伪装值。\n请先运行一次该应用，模块会自动生成伪装身份。")
-                    .setPositiveButton("确定", null)
+                    .setMessage("该应用暂无伪装值。\n可以立即生成一套随机伪装身份并写入，\n目标应用下次启动时将使用此身份。")
+                    .setPositiveButton("生成伪装值", (d, w) -> generateAndWriteIdentity(item))
+                    .setNegativeButton("取消", null)
                     .show();
             return;
         }
