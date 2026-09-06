@@ -102,35 +102,51 @@ public class AppPickerActivity extends AppCompatActivity {
             allPkgs.remove(MODULE_PKG);
 
             PackageManager pm = getPackageManager();
+            Drawable defaultIcon = getResources().getDrawable(android.R.drawable.sym_def_app_icon);
             List<AppItem> items = new ArrayList<>();
             for (String pkg : allPkgs) {
                 AppItem item = new AppItem();
                 item.packageName = pkg;
                 item.appName = pkg;
-                item.icon = getResources().getDrawable(android.R.drawable.sym_def_app_icon);
+                item.icon = defaultIcon;
                 try {
-                    ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
-                    // 名称：优先用 PackageManager 的版本
+                    ApplicationInfo ai = pm.getApplicationInfo(pkg, PackageManager.GET_META_DATA);
+                    // 名称：多种方式尝试
                     try {
-                        CharSequence label = pm.getApplicationLabel(ai);
-                        if (label != null) item.appName = label.toString();
+                        CharSequence label = ai.loadLabel(pm);
+                        if (label != null && !label.toString().equals(pkg)) {
+                            item.appName = label.toString();
+                        }
                     } catch (Throwable ignored) {}
                     if (item.appName.equals(pkg)) {
                         try {
-                            CharSequence label = ai.loadLabel(pm);
+                            CharSequence label = pm.getApplicationLabel(ai);
                             if (label != null && !label.toString().equals(pkg)) {
                                 item.appName = label.toString();
                             }
                         } catch (Throwable ignored) {}
                     }
-                    // 图标：优先用 pm.getApplicationIcon(pkg)（对停止状态应用更友好）
+                    // 图标：方式1 - 直接从应用资源加载（最可靠）
                     try {
-                        Drawable icon = pm.getApplicationIcon(pkg);
-                        if (icon != null) item.icon = icon;
-                    } catch (Throwable ignored) {}
-                    if (item.icon == null || item.icon.getConstantState() == null) {
+                        android.content.res.Resources res = pm.getResourcesForApplication(ai);
+                        if (ai.icon != 0) {
+                            Drawable icon = res.getDrawable(ai.icon, null);
+                            if (icon != null) item.icon = icon;
+                        }
+                    } catch (Throwable e) {
+                        log("图标方式1失败 " + pkg + ": " + e.getMessage());
+                    }
+                    // 图标：方式2 - PackageManager
+                    if (item.icon == defaultIcon) {
                         try {
-                            Drawable icon = ai.loadIcon(pm);
+                            Drawable icon = pm.getApplicationIcon(ai);
+                            if (icon != null) item.icon = icon;
+                        } catch (Throwable ignored) {}
+                    }
+                    // 图标：方式3 - String版本
+                    if (item.icon == defaultIcon) {
+                        try {
+                            Drawable icon = pm.getApplicationIcon(pkg);
                             if (icon != null) item.icon = icon;
                         } catch (Throwable ignored) {}
                     }
