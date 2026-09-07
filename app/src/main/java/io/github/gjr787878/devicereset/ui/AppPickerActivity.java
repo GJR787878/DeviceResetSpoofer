@@ -673,9 +673,21 @@ public class AppPickerActivity extends AppCompatActivity {
         try {
             Process su = Runtime.getRuntime().exec("su");
             java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
-            // 用 find 在所有用户目录下搜索哨兵文件，提取包名
-            os.writeBytes("find /data/user/ -maxdepth 4 -name '.identity_sentinel' 2>/dev/null | while read f; do echo \"$f\" | sed -n 's|.*/data/user/[0-9]*/\\([^/]*\\)/files/.*|\\1|p'; done\n");
-            os.writeBytes("find /data/data/ -maxdepth 3 -name '.identity_sentinel' 2>/dev/null | while read f; do echo \"$f\" | sed -n 's|.*/data/data/\\([^/]*\\)/files/.*|\\1|p'; done\n");
+            // 用for循环遍历所有用户目录（find会被SELinux阻止进入其他用户目录）
+            os.writeBytes("for u in /data/user/*/; do\n");
+            os.writeBytes("  for d in \"$u\"*/; do\n");
+            os.writeBytes("    pkg=$(basename \"$d\")\n");
+            os.writeBytes("    if [ -f \"$d/files/.identity_sentinel\" ]; then\n");
+            os.writeBytes("      echo \"$pkg\"\n");
+            os.writeBytes("    fi\n");
+            os.writeBytes("  done\n");
+            os.writeBytes("done\n");
+            os.writeBytes("for d in /data/data/*/; do\n");
+            os.writeBytes("  pkg=$(basename \"$d\")\n");
+            os.writeBytes("  if [ -f \"$d/files/.identity_sentinel\" ]; then\n");
+            os.writeBytes("    echo \"$pkg\"\n");
+            os.writeBytes("  fi\n");
+            os.writeBytes("done\n");
             os.writeBytes("exit\n");
             os.flush();
             java.io.BufferedReader reader = new java.io.BufferedReader(
@@ -824,7 +836,7 @@ public class AppPickerActivity extends AppCompatActivity {
                     os.writeBytes("mkdir -p '" + dir + "'\n");
                     os.writeBytes("cp '" + tmpPath + "' '" + dir + "/.identity_sentinel'\n");
                     os.writeBytes("chmod 666 '" + dir + "/.identity_sentinel'\n");
-                    os.writeBytes("ls -l '" + dir + "/.identity_sentinel'\n");
+                    os.writeBytes("if [ -f '" + dir + "/.identity_sentinel' ]; then echo 'OK:'$(wc -c < '" + dir + "/.identity_sentinel'); else echo 'FAIL'; fi\n");
                     os.writeBytes("exit\n");
                     os.flush();
                     java.io.BufferedReader reader = new java.io.BufferedReader(
@@ -835,7 +847,7 @@ public class AppPickerActivity extends AppCompatActivity {
                     reader.close();
                     su.waitFor();
                     log("写入结果 " + dir + ": " + out);
-                    if (out.toString().contains(".identity_sentinel")) anySuccess = true;
+                    if (out.toString().startsWith("OK:")) anySuccess = true;
                 } catch (Throwable e) {
                     log("写入异常 " + dir + ": " + e.getMessage());
                 }
@@ -852,15 +864,19 @@ public class AppPickerActivity extends AppCompatActivity {
         return false;
     }
 
-    /** 用 root find 定位目标应用在所有用户下的数据目录，返回 files 目录路径（自动创建） */
+    /** 用 for 循环遍历所有用户目录，定位目标应用的数据目录，返回 files 目录路径（自动创建） */
     private List<String> findAppFilesDirs(String packageName) {
         List<String> dataDirs = new ArrayList<>();
         try {
             Process su = Runtime.getRuntime().exec("su");
             java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
-            // 找应用的数据目录（不是files子目录，因为files可能还没创建）
-            os.writeBytes("find /data/user/ -maxdepth 2 -type d -name '" + packageName + "' 2>/dev/null\n");
-            os.writeBytes("find /data/data/ -maxdepth 1 -type d -name '" + packageName + "' 2>/dev/null\n");
+            // 用for循环遍历（find会被SELinux阻止进入其他用户目录）
+            os.writeBytes("for u in /data/user/*/; do\n");
+            os.writeBytes("  d=\"$u").append(packageName).append("\"\n");
+            os.writeBytes("  if [ -d \"$d\" ]; then echo \"$d\"; fi\n");
+            os.writeBytes("done\n");
+            os.writeBytes("d='/data/data/").append(packageName).append("'\n");
+            os.writeBytes("if [ -d \"$d\" ]; then echo \"$d\"; fi\n");
             os.writeBytes("exit\n");
             os.flush();
             java.io.BufferedReader reader = new java.io.BufferedReader(
@@ -886,7 +902,6 @@ public class AppPickerActivity extends AppCompatActivity {
             dataDirs.add("/data/data/" + packageName);
         }
         log("找到数据目录 " + packageName + ": " + dataDirs);
-        // 转为 files 目录路径
         List<String> filesDirs = new ArrayList<>();
         for (String d : dataDirs) {
             filesDirs.add(d + "/files");
