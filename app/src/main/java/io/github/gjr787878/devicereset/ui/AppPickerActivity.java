@@ -449,7 +449,36 @@ public class AppPickerActivity extends AppCompatActivity {
                 }
                 full.append("\n");
 
-                // 3. 原始调试日志
+                // 3. Xposed模块日志（看模块端写入是否成功）
+                full.append("========== Xposed模块日志 ==========\n");
+                try {
+                    Process logcat = Runtime.getRuntime().exec(new String[]{"su", "-c",
+                            "logcat -d -t 200 2>/dev/null | grep -iE 'DeviceReset|devicereset|Sentinel|sentinel|identity|Identity' | tail -50"});
+                    java.io.BufferedReader lr = new java.io.BufferedReader(
+                            new java.io.InputStreamReader(logcat.getInputStream()));
+                    String ll;
+                    while ((ll = lr.readLine()) != null) full.append(ll).append("\n");
+                    lr.close();
+                    logcat.waitFor();
+                } catch (Throwable e) {
+                    full.append("logcat读取失败: ").append(e.getMessage()).append("\n");
+                }
+                // 也尝试读LSPosed日志文件
+                try {
+                    Process lsp = Runtime.getRuntime().exec(new String[]{"su", "-c",
+                            "ls -t /data/adb/lspd/log/*.log 2>/dev/null | head -1 | xargs grep -iE 'DeviceReset|Sentinel|identity' 2>/dev/null | tail -30"});
+                    java.io.BufferedReader lr2 = new java.io.BufferedReader(
+                            new java.io.InputStreamReader(lsp.getInputStream()));
+                    String ll2;
+                    while ((ll2 = lr2.readLine()) != null) full.append(ll2).append("\n");
+                    lr2.close();
+                    lsp.waitFor();
+                } catch (Throwable e) {
+                    full.append("LSPosed日志读取失败: ").append(e.getMessage()).append("\n");
+                }
+                full.append("\n");
+
+                // 4. 原始调试日志
                 full.append("========== 调试日志 ==========\n");
                 full.append(debugLog.toString());
 
