@@ -136,6 +136,7 @@ public class AppPickerActivity extends AppCompatActivity {
     private void loadApps() {
         debugLog.setLength(0);
         new Thread(() -> {
+          try {
             // 1. 从 LSPosed 配置读取作用域
             Set<String> scopePkgs = readLSPosedScope();
             log("作用域读取结果: " + scopePkgs.size() + " 个 -> " + scopePkgs);
@@ -326,6 +327,20 @@ public class AppPickerActivity extends AppCompatActivity {
             });
             // 进入后连续多轮自动重扫，模块一生成新身份就自动标蓝，无需手动生成
             startAutoRescanSeries();
+          } catch (Throwable fatal) {
+            // 兜底：任何异常都不能让界面永久停在"正在扫描"，并务必写出诊断日志
+            log("加载致命异常: " + fatal);
+            final String emsg = String.valueOf(fatal);
+            runOnUiThread(() -> {
+                tvLoading.setVisibility(View.GONE);
+                tvEmpty.setVisibility(View.VISIBLE);
+                tvEmpty.setText("扫描异常: " + emsg);
+                tvDebug.setText(debugLog.toString());
+                tvDebug.setVisibility(View.VISIBLE);
+                rvApps.setVisibility(View.GONE);
+            });
+            writeDiagToDownload();
+          }
         }).start();
     }
 
@@ -947,37 +962,75 @@ public class AppPickerActivity extends AppCompatActivity {
 
     // ==================== 哨兵文件 ====================
 
+    /** 执行一段su shell脚本，带超时，返回stdout（超时/异常返回null），防止永久阻塞 */
+    private String execSuScriptWithTimeout(String script, int timeoutSec, String tag) {
+        Process p = null;
+        try {
+            p = Runtime.getRuntime().exec("su");
+            java.io.DataOutputStream os = new java.io.DataOutputStream(p.getOutputStream());
+            os.writeBytes(script);
+            os.writeBytes("exit\n");
+            os.flush();
+            os.close();
+            final Process fp = p;
+            final StringBuilder out = new StringBuilder();
+            Thread rt = new Thread(() -> {
+                try {
+                    java.io.BufferedReader r = new java.io.BufferedReader(
+                            new java.io.InputStreamReader(fp.getInputStream()));
+                    String l;
+                    while ((l = r.readLine()) != null) out.append(l).append("\n");
+                    r.close();
+                } catch (Throwable ignored) {}
+            });
+            rt.setDaemon(true);
+            rt.start();
+            Thread et = new Thread(() -> {
+                try {
+                    java.io.BufferedReader er = new java.io.BufferedReader(
+                            new java.io.InputStreamReader(fp.getErrorStream()));
+                    while (er.readLine() != null) {}
+                    er.close();
+                } catch (Throwable ignored) {}
+            });
+            et.setDaemon(true);
+            et.start();
+            boolean finished = p.waitFor(timeoutSec, java.util.concurrent.TimeUnit.SECONDS);
+            if (!finished) {
+                p.destroy();
+                log(tag + " 超时(" + timeoutSec + "s)，已中断");
+                return null;
+            }
+            rt.join(1500);
+            return out.toString();
+        } catch (Throwable e) {
+            log(tag + " 异常: " + e.getMessage());
+            if (p != null) try { p.destroy(); } catch (Throwable ignored) {}
+            return null;
+        }
+    }
+
     private Set<String> scanIdentityPackages() {
         Set<String> result = new HashSet<>();
         try {
-            Process su = Runtime.getRuntime().exec("su");
-            java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
-            // 用for循环遍历所有用户目录（find会被SELinux阻止进入其他用户目录）
-            os.writeBytes("for u in /data/user/*/; do\n");
-            os.writeBytes("  for d in \"$u\"*/; do\n");
-            os.writeBytes("    pkg=$(basename \"$d\")\n");
-            os.writeBytes("    if [ -f \"$d/files/.identity_sentinel\" ]; then\n");
-            os.writeBytes("      echo \"$pkg\"\n");
-            os.writeBytes("    fi\n");
-            os.writeBytes("  done\n");
-            os.writeBytes("done\n");
-            os.writeBytes("for d in /data/data/*/; do\n");
-            os.writeBytes("  pkg=$(basename \"$d\")\n");
-            os.writeBytes("  if [ -f \"$d/files/.identity_sentinel\" ]; then\n");
-            os.writeBytes("    echo \"$pkg\"\n");
-            os.writeBytes("  fi\n");
-            os.writeBytes("done\n");
-            os.writeBytes("exit\n");
-            os.flush();
-            java.io.BufferedReader reader = new java.io.BufferedReader(
-                    new java.io.InputStreamReader(su.getInputStream()));
-            String line;
-            while ((line = reader.readLine()) != null) {
-                line = line.trim();
-                if (!line.isEmpty() && isValidPackageName(line)) result.add(line);
+            StringBuilder script = new StringBuilder();
+            script.append("for u in /data/user/*/; do\n");
+            script.append("  for d in \"$u\"*/; do\n");
+            script.append("    pkg=$(basename \"$d\")\n");
+            script.append("    if [ -f \"$d/files/.identity_sentinel\" ]; then echo \"$pkg\"; fi\n");
+            script.append("  done\n");
+            script.append("done\n");
+            script.append("for d in /data/data/*/; do\n");
+            script.append("  pkg=$(basename \"$d\")\n");
+            script.append("  if [ -f \"$d/files/.identity_sentinel\" ]; then echo \"$pkg\"; fi\n");
+            script.append("done\n");
+            String raw = execSuScriptWithTimeout(script.toString(), 10, "哨兵扫描");
+            if (raw != null) {
+                for (String line : raw.split("\n")) {
+                    line = line.trim();
+                    if (!line.isEmpty() && isValidPackageName(line)) result.add(line);
+                }
             }
-            reader.close();
-            su.waitFor();
         } catch (Throwable e) {
             log("哨兵扫描异常: " + e.getMessage());
         }
@@ -986,89 +1039,105 @@ public class AppPickerActivity extends AppCompatActivity {
     }
 
     private String readIdentityFile(String packageName) {
+        List<String> paths = buildCandidatePaths(packageName, ".identity_sentinel");
+        return readFirstExistingFile(paths, packageName, "哨兵");
+    }
+
+    /** 构建某文件在各用户/外部存储下的全部候选路径 */
+    private List<String> buildCandidatePaths(String packageName, String fileName) {
         List<String> paths = new ArrayList<>();
         int[] userIds = {0, 10, 11, 12, 13, 14, 15};
         for (int uid : userIds) {
-            paths.add("/data/user/" + uid + "/" + packageName + "/files/.identity_sentinel");
-            paths.add("/data/user_de/" + uid + "/" + packageName + "/files/.identity_sentinel");
+            paths.add("/data/user/" + uid + "/" + packageName + "/files/" + fileName);
+            paths.add("/data/user_de/" + uid + "/" + packageName + "/files/" + fileName);
         }
-        paths.add("/data/data/" + packageName + "/files/.identity_sentinel");
+        paths.add("/data/data/" + packageName + "/files/" + fileName);
         // 外部存储备份路径（模块在目标APP进程内写入，UI通过root读取）
-        paths.add("/sdcard/Android/data/" + packageName + "/files/.identity_sentinel");
-        paths.add("/storage/emulated/0/Android/data/" + packageName + "/files/.identity_sentinel");
-
-        for (String path : paths) {
-            try {
-                // 用 su -c 单条命令直接cat，同时合并stderr看错误
-                Process p = Runtime.getRuntime().exec(new String[]{"su", "-c",
-                        "cat '" + path + "' 2>&1"});
-                java.io.BufferedReader reader = new java.io.BufferedReader(
-                        new java.io.InputStreamReader(p.getInputStream()));
-                StringBuilder sb = new StringBuilder();
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    sb.append(line).append("\n");
-                }
-                reader.close();
-                p.waitFor();
-                String content = sb.toString().trim();
-                if (content.startsWith("{")) {
-                    log("读取成功 " + path + " (" + content.length() + " bytes)");
-                    return content;
-                } else {
-                    log("读取失败 " + path + " exit=" + p.exitValue() + " output=" + content.substring(0, Math.min(80, content.length())));
-                }
-            } catch (Throwable e) {
-                log("读取异常 " + path + ": " + e.getMessage());
-            }
-        }
-        log("所有路径均未读取到 " + packageName);
-        return null;
+        paths.add("/sdcard/Android/data/" + packageName + "/files/" + fileName);
+        paths.add("/storage/emulated/0/Android/data/" + packageName + "/files/" + fileName);
+        return paths;
     }
 
-    /** 带重试的读取，最多3次 */
-    private String readIdentityFileWithRetry(String packageName) {
-        for (int i = 0; i < 3; i++) {
-            String json = readIdentityFile(packageName);
-            if (json != null && json.startsWith("{")) return json;
-            try { Thread.sleep(500); } catch (Throwable ignored) {}
-        }
-        return null;
-    }
-
-    /** root读取指定单个文件内容，成功返回内容，失败返回null */
-    private String catViaRoot(String path) {
+    /**
+     * 在单个su进程内依次尝试多个路径，返回第一个存在且内容为JSON的文件。
+     * 带8秒超时，避免某个root命令永久waitFor导致界面卡在"正在扫描"。
+     */
+    private String readFirstExistingFile(List<String> paths, String tag, String kind) {
+        Process p = null;
         try {
-            Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", "cat '" + path + "' 2>&1"});
-            java.io.BufferedReader r = new java.io.BufferedReader(
-                    new java.io.InputStreamReader(p.getInputStream()));
-            StringBuilder sb = new StringBuilder();
-            String l;
-            while ((l = r.readLine()) != null) sb.append(l).append("\n");
-            r.close();
-            p.waitFor();
-            String c = sb.toString().trim();
-            return c.startsWith("{") ? c : null;
-        } catch (Throwable e) {
+            StringBuilder script = new StringBuilder();
+            for (String path : paths) {
+                script.append("if [ -f '").append(path).append("' ]; then ")
+                      .append("echo '===DRS_BEGIN==='; cat '").append(path)
+                      .append("'; echo; echo '===DRS_END==='; exit 0; fi\n");
+            }
+            script.append("echo '===DRS_NONE==='\n");
+            p = Runtime.getRuntime().exec("su");
+            java.io.DataOutputStream os = new java.io.DataOutputStream(p.getOutputStream());
+            os.writeBytes(script.toString());
+            os.writeBytes("exit\n");
+            os.flush();
+            os.close();
+            final Process fp = p;
+            final StringBuilder out = new StringBuilder();
+            Thread readerThread = new Thread(() -> {
+                try {
+                    java.io.BufferedReader r = new java.io.BufferedReader(
+                            new java.io.InputStreamReader(fp.getInputStream()));
+                    String l;
+                    while ((l = r.readLine()) != null) out.append(l).append("\n");
+                    // 主动消费stderr，防止缓冲区填满阻塞
+                    try {
+                        java.io.BufferedReader er = new java.io.BufferedReader(
+                                new java.io.InputStreamReader(fp.getErrorStream()));
+                        while (er.readLine() != null) {}
+                        er.close();
+                    } catch (Throwable ignored) {}
+                    r.close();
+                } catch (Throwable ignored) {}
+            });
+            readerThread.setDaemon(true);
+            readerThread.start();
+            boolean finished = p.waitFor(8, java.util.concurrent.TimeUnit.SECONDS);
+            if (!finished) {
+                p.destroy();
+                log(kind + "读取超时(8s) " + tag);
+                return null;
+            }
+            readerThread.join(1500);
+            String all = out.toString();
+            int b = all.indexOf("===DRS_BEGIN===");
+            int e = all.indexOf("===DRS_END===");
+            if (b >= 0 && e > b) {
+                String content = all.substring(b + "===DRS_BEGIN===".length(), e).trim();
+                if (content.startsWith("{")) {
+                    log(kind + "读取成功 " + tag + " (" + content.length() + " bytes)");
+                    return content;
+                }
+            }
+            log(kind + "所有路径均无文件 " + tag);
+            return null;
+        } catch (Throwable ex) {
+            log(kind + "读取异常 " + tag + ": " + ex.getMessage());
+            if (p != null) try { p.destroy(); } catch (Throwable ignored) {}
             return null;
         }
     }
 
+    /** 带重试的读取，最多2次 */
+    private String readIdentityFileWithRetry(String packageName) {
+        for (int i = 0; i < 2; i++) {
+            String json = readIdentityFile(packageName);
+            if (json != null && json.startsWith("{")) return json;
+            try { Thread.sleep(300); } catch (Throwable ignored) {}
+        }
+        return null;
+    }
+
     /** 读取目标进程当前真正在用的运行时值（模块每次加载时写.identity_runtime，UI不写） */
     private String readRuntimeFile(String packageName) {
-        String[] paths = {
-                "/sdcard/Android/data/" + packageName + "/files/.identity_runtime",
-                "/storage/emulated/0/Android/data/" + packageName + "/files/.identity_runtime"
-        };
-        for (String path : paths) {
-            String c = catViaRoot(path);
-            if (c != null) {
-                log("读取运行时值成功 " + path + " (" + c.length() + " bytes)");
-                return c;
-            }
-        }
-        log("未读取到运行时值 " + packageName);
-        return null;
+        List<String> paths = buildCandidatePaths(packageName, ".identity_runtime");
+        return readFirstExistingFile(paths, packageName, "运行时");
     }
 
     /** 判断目标应用进程当前是否正在运行（返回进程名列表字符串） */
