@@ -513,36 +513,27 @@ public class AppPickerActivity extends AppCompatActivity {
                     }
                     full.append("UI状态: hasIdentity=").append(item.hasIdentity)
                             .append(", identityJson长度=").append(item.identityJson == null ? 0 : item.identityJson.length()).append("\n");
-                    // 显式检查外部存储备份（黑洞加速器实际生效值）
-                    String extPath = "/sdcard/Android/data/" + item.packageName + "/files/.identity_sentinel";
+                    // UI自身SharedPreferences缓存（也是一个存储位置）
                     try {
-                        Process ep = Runtime.getRuntime().exec(new String[]{"su", "-c",
-                                "ls -la '" + extPath + "' 2>&1; echo '---内容---'; cat '" + extPath + "' 2>&1"});
-                        java.io.BufferedReader er = new java.io.BufferedReader(
-                                new java.io.InputStreamReader(ep.getInputStream()));
-                        full.append("外部备份[").append(extPath).append("]:\n");
-                        String el;
-                        while ((el = er.readLine()) != null) full.append(el).append("\n");
-                        er.close();
-                        ep.waitFor();
-                    } catch (Throwable e) {
-                        full.append("外部备份读取异常: ").append(e.getMessage()).append("\n");
-                    }
-                    // 运行时实际值（进程真正在用）+ 进程是否运行
-                    String rtPath = "/sdcard/Android/data/" + item.packageName + "/files/.identity_runtime";
+                        String cached = getSharedPreferences("devicereset_ui", MODE_PRIVATE)
+                                .getString("identity_" + item.packageName, null);
+                        full.append("UI缓存[SharedPreferences identity_").append(item.packageName).append("]: ")
+                                .append(cached == null ? "无" : "(" + cached.length() + " bytes) " + cached).append("\n");
+                    } catch (Throwable ignored) {}
+                    // 枚举所有可能存储伪装值的位置：内部多用户 / user_de / data/data / 外部多卷，逐个 ls+cat
+                    full.append("------ 所有可能的身份存储位置（逐项列出）------\n");
+                    full.append(dumpAllIdentityLocations(item.packageName));
+                    // 进程是否在运行
                     try {
-                        Process rp = Runtime.getRuntime().exec(new String[]{"su", "-c",
-                                "echo '进程:'; pidof '" + item.packageName + "' 2>&1; echo '---运行时值---'; cat '" + rtPath + "' 2>&1"});
-                        java.io.BufferedReader rr = new java.io.BufferedReader(
-                                new java.io.InputStreamReader(rp.getInputStream()));
-                        full.append("运行时实际值[").append(rtPath).append("]:\n");
-                        String rl;
-                        while ((rl = rr.readLine()) != null) full.append(rl).append("\n");
-                        rr.close();
-                        rp.waitFor();
-                    } catch (Throwable e) {
-                        full.append("运行时值读取异常: ").append(e.getMessage()).append("\n");
-                    }
+                        Process pp = Runtime.getRuntime().exec(new String[]{"su", "-c",
+                                "echo '进程PID:'; pidof '" + item.packageName + "' 2>&1"});
+                        java.io.BufferedReader pr = new java.io.BufferedReader(
+                                new java.io.InputStreamReader(pp.getInputStream()));
+                        String pl;
+                        while ((pl = pr.readLine()) != null) full.append(pl).append("\n");
+                        pr.close();
+                        pp.waitFor();
+                    } catch (Throwable ignored) {}
                     // logcat兜底：模块最后一次加载记录（免重启也能看到进程实际值）
                     try {
                         Identity logcatId = readRuntimeFromLogcat(item.packageName);
@@ -1026,6 +1017,48 @@ public class AppPickerActivity extends AppCompatActivity {
         }
     }
 
+    /**
+     * 枚举一个包在“所有可能存伪装值的位置”的文件，逐个 ls -la 并 cat 内容，用于诊断。
+     * 覆盖：内部 /data/user/<用户0,10..15>/<pkg>/files、/data/user_de/...、/data/data/...、
+     * 外部 /sdcard 与 /storage/emulated/<用户>/Android/data/<pkg>/files；最后 best-effort find。
+     */
+    private String dumpAllIdentityLocations(String pkg) {
+        StringBuilder sc = new StringBuilder();
+        // 内部多用户
+        sc.append("echo '### [内部] /data/user/<用户>/").append(pkg).append("/files ###'\n");
+        sc.append("for U in 0 10 11 12 13 14 15; do\n");
+        sc.append("  D=\"/data/user/$U/").append(pkg).append("/files\"\n");
+        sc.append("  echo \"--- $D ---\"; ls -la \"$D\" 2>&1\n");
+        sc.append("  for F in .identity_sentinel .identity_runtime; do P=\"$D/$F\"; if [ -f \"$P\" ]; then echo \">>> 内容 $P:\"; cat \"$P\" 2>&1; echo; fi; done\n");
+        sc.append("done\n");
+        // user_de（设备加密存储，早期启动可能写这里）
+        sc.append("echo '### [DE加密] /data/user_de/<用户>/").append(pkg).append("/files ###'\n");
+        sc.append("for U in 0 10 11 12 13 14 15; do\n");
+        sc.append("  D=\"/data/user_de/$U/").append(pkg).append("/files\"\n");
+        sc.append("  echo \"--- $D ---\"; ls -la \"$D\" 2>&1\n");
+        sc.append("  for F in .identity_sentinel .identity_runtime; do P=\"$D/$F\"; if [ -f \"$P\" ]; then echo \">>> 内容 $P:\"; cat \"$P\" 2>&1; echo; fi; done\n");
+        sc.append("done\n");
+        // /data/data 符号链接视图
+        sc.append("echo '### [data/data] /data/data/").append(pkg).append("/files ###'\n");
+        sc.append("D=\"/data/data/").append(pkg).append("/files\"; echo \"--- $D ---\"; ls -la \"$D\" 2>&1\n");
+        sc.append("for F in .identity_sentinel .identity_runtime; do P=\"$D/$F\"; if [ -f \"$P\" ]; then echo \">>> 内容 $P:\"; cat \"$P\" 2>&1; echo; fi; done\n");
+        // 外部存储多卷/多用户
+        sc.append("echo '### [外部] <卷>/Android/data/").append(pkg).append("/files ###'\n");
+        sc.append("for M in /sdcard /storage/emulated/0 /storage/emulated/10 /storage/emulated/11 /storage/emulated/12 /storage/emulated/13 /storage/self/primary; do\n");
+        sc.append("  D=\"$M/Android/data/").append(pkg).append("/files\"\n");
+        sc.append("  echo \"--- $D ---\"; ls -la \"$D\" 2>&1\n");
+        sc.append("  for F in .identity_sentinel .identity_runtime; do P=\"$D/$F\"; if [ -f \"$P\" ]; then echo \">>> 内容 $P:\"; cat \"$P\" 2>&1; echo; fi; done\n");
+        sc.append("done\n");
+        // best-effort 全盘查找该包相关的身份文件
+        sc.append("echo '### [find] 该包所有 .identity* 文件 ###'\n");
+        sc.append("find /data/data/").append(pkg).append(" /sdcard/Android/data/").append(pkg)
+          .append(" -name '.identity*' -exec ls -la {} \\; 2>/dev/null\n");
+        sc.append("for U in 0 10 11 12 13 14 15; do find /data/user/$U/").append(pkg)
+          .append(" -name '.identity*' -exec ls -la {} \\; 2>/dev/null; done\n");
+        String out = execSuScriptWithTimeout(sc.toString(), 15, "枚举身份位置");
+        return out == null ? "(枚举超时或失败)\n" : out;
+    }
+
     private Set<String> scanIdentityPackages() {
         Set<String> result = new HashSet<>();
         try {
@@ -1249,175 +1282,21 @@ public class AppPickerActivity extends AppCompatActivity {
         }
     }
 
-    /** 生成随机身份并写入目标应用的哨兵文件 */
-    private void generateAndWriteIdentity(AppItem item) {
-        new Thread(() -> {
-            try {
-                Identity identity = IdentityGenerator.generateRandom();
-                String json = identity.toJson();
-                boolean ok = writeIdentityFile(item.packageName, json);
-                if (ok) {
-                    item.identityJson = json;
-                    item.hasIdentity = true;
-                    // 保存到SharedPreferences，UI自己记住，下次进入无需root读取
-                    getSharedPreferences("devicereset_ui", MODE_PRIVATE).edit()
-                            .putString("identity_" + item.packageName, json).apply();
-                    log("已保存伪装值到SharedPreferences " + item.packageName);
-                    runOnUiThread(() -> {
-                        adapter.notifyDataSetChanged();
-                        updateCount();
-                        showIdentityDialog(item);
-                    });
-                } else {
-                    runOnUiThread(() -> {
-                        String title, msg, btnOk;
-                        if (LANG_ZH.equals(currentLang)) {
-                            title = "写入失败"; msg = "无法写入伪装值到目标应用目录。\n请确保已授予 Root 权限。"; btnOk = "确定";
-                        } else if (LANG_EN.equals(currentLang)) {
-                            title = "Write Failed"; msg = "Cannot write identity to target app directory.\nPlease grant Root permission."; btnOk = "OK";
-                        } else {
-                            title = "Ошибка записи"; msg = "Не удалось записать подмену в каталог приложения.\nПредоставьте права Root."; btnOk = "ОК";
-                        }
-                        new AlertDialog.Builder(this).setTitle(title).setMessage(msg).setPositiveButton(btnOk, null).show();
-                    });
-                }
-            } catch (Throwable e) {
-                log("生成身份异常: " + e.getMessage());
-            }
-        }).start();
-    }
-
-    /** 通过 root 用 heredoc 直接写入身份 JSON（所有用户目录），不经过App私有目录避免SELinux问题 */
-    private boolean writeIdentityFile(String packageName, String json) {
-        List<String> dirs = findAppFilesDirs(packageName);
-        log("写入目标目录 " + packageName + ": " + dirs);
-        if (dirs.isEmpty()) {
-            log("未找到目标应用的任何数据目录，写入失败");
-            return false;
+    /** 读不到伪装值时的提示：模块在目标应用每次启动时自动生成并应用，无需也不再提供手动写入 */
+    private void showAutoOnlyInfo(AppItem item, boolean zh, boolean en) {
+        String msg, ok;
+        if (zh) {
+            msg = "暂未读取到该应用的伪装值。\n模块会在该应用每次启动时自动生成并应用，无需手动操作。\n请先打开一次该应用，再回到这里查看。";
+            ok = "确定";
+        } else if (en) {
+            msg = "No identity read yet.\nThe module auto-generates and applies one every time the app launches — no manual action needed.\nOpen the app once, then return here to view.";
+            ok = "OK";
+        } else {
+            msg = "Подмена ещё не прочитана.\nМодуль автоматически создаёт и применяет её при каждом запуске приложения — вручную ничего делать не нужно.\nОткройте приложение один раз и вернитесь сюда.";
+            ok = "ОК";
         }
-
-        // 第一步：先写到 /data/local/tmp/ 验证内容
-        String tmpPath = "/data/local/tmp/drs_write_" + System.currentTimeMillis() + ".json";
-        try {
-            Process su0 = Runtime.getRuntime().exec("su");
-            java.io.DataOutputStream os0 = new java.io.DataOutputStream(su0.getOutputStream());
-            os0.writeBytes("cat > '" + tmpPath + "' << 'DRS_WRITE_EOF'\n");
-            os0.writeBytes(json + "\n");
-            os0.writeBytes("DRS_WRITE_EOF\n");
-            os0.writeBytes("ls -l '" + tmpPath + "'\n");
-            os0.writeBytes("exit\n");
-            os0.flush();
-            java.io.BufferedReader r0 = new java.io.BufferedReader(
-                    new java.io.InputStreamReader(su0.getInputStream()));
-            StringBuilder out0 = new StringBuilder();
-            String ln;
-            while ((ln = r0.readLine()) != null) out0.append(ln);
-            r0.close();
-            su0.waitFor();
-            log("写入临时文件结果: " + out0);
-            if (!out0.toString().contains(tmpPath)) {
-                log("临时文件写入失败！");
-                return false;
-            }
-        } catch (Throwable e) {
-            log("临时文件写入异常: " + e.getMessage());
-            return false;
-        }
-
-        // 第二步：用 dd 复制到每个目标目录
-        boolean anySuccess = false;
-        for (String dir : dirs) {
-            try {
-                String target = dir + "/.identity_sentinel";
-                Process su = Runtime.getRuntime().exec("su");
-                java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
-                os.writeBytes("mkdir -p '" + dir + "'\n");
-                os.writeBytes("dd if='" + tmpPath + "' of='" + target + "' bs=65536\n");
-                os.writeBytes("chmod 666 '" + target + "'\n");
-                os.writeBytes("ls -l '" + target + "'\n");
-                os.writeBytes("exit\n");
-                os.flush();
-                java.io.BufferedReader reader = new java.io.BufferedReader(
-                        new java.io.InputStreamReader(su.getInputStream()));
-                StringBuilder out = new StringBuilder();
-                String line;
-                while ((line = reader.readLine()) != null) out.append(line);
-                reader.close();
-                su.waitFor();
-                log("dd写入结果 " + target + ": " + out);
-                if (out.toString().contains(target) && out.toString().contains(".identity_sentinel")) {
-                    anySuccess = true;
-                    log("写入成功 " + target);
-                }
-            } catch (Throwable e) {
-                log("写入异常 " + dir + ": " + e.getMessage());
-            }
-        }
-
-        // 清理临时文件
-        try {
-            Runtime.getRuntime().exec(new String[]{"su", "-c", "rm -f '" + tmpPath + "'"});
-        } catch (Throwable ignored) {}
-
-        if (anySuccess) {
-            try { Thread.sleep(300); } catch (Throwable ignored) {}
-            String verify = readIdentityFile(packageName);
-            if (verify != null && verify.startsWith("{")) {
-                log("写入验证成功，读取到 " + verify.length() + " bytes");
-                return true;
-            } else {
-                log("写入验证失败：重新读取为空");
-            }
-        }
-        return false;
-    }
-
-    /** 直接遍历已知用户ID，定位目标应用的数据目录，返回 files 目录路径 */
-    private List<String> findAppFilesDirs(String packageName) {
-        List<String> dataDirs = new ArrayList<>();
-        try {
-            Process su = Runtime.getRuntime().exec("su");
-            java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
-            int[] userIds = {0, 10, 11, 12, 13, 14, 15};
-            for (int uid : userIds) {
-                String d = "/data/user/" + uid + "/" + packageName;
-                os.writeBytes("if [ -d '" + d + "' ]; then echo '" + d + "'; fi\n");
-            }
-            String d2 = "/data/data/" + packageName;
-            os.writeBytes("if [ -d '" + d2 + "' ]; then echo '" + d2 + "'; fi\n");
-            os.writeBytes("exit\n");
-            os.flush();
-            java.io.BufferedReader reader = new java.io.BufferedReader(
-                    new java.io.InputStreamReader(su.getInputStream()));
-            String line;
-            while ((line = reader.readLine()) != null) {
-                line = line.trim();
-                if (!line.isEmpty() && !dataDirs.contains(line)) {
-                    dataDirs.add(line);
-                }
-            }
-            reader.close();
-            su.waitFor();
-        } catch (Throwable e) {
-            log("find数据目录失败 " + packageName + ": " + e.getMessage());
-        }
-        // 兜底：常见用户ID
-        if (dataDirs.isEmpty()) {
-            for (int uid : new int[]{0, 10, 11, 12, 13}) {
-                String candidate = "/data/user/" + uid + "/" + packageName;
-                if (!dataDirs.contains(candidate)) dataDirs.add(candidate);
-            }
-            dataDirs.add("/data/data/" + packageName);
-        }
-        log("找到数据目录 " + packageName + ": " + dataDirs);
-        List<String> filesDirs = new ArrayList<>();
-        for (String d : dataDirs) {
-            filesDirs.add(d + "/files");
-        }
-        // 外部存储备份路径（UI手动生成时也写一份，模块和UI都能读到）
-        filesDirs.add("/sdcard/Android/data/" + packageName + "/files");
-        filesDirs.add("/storage/emulated/0/Android/data/" + packageName + "/files");
-        return filesDirs;
+        new AlertDialog.Builder(this).setTitle(item.appName).setMessage(msg)
+                .setPositiveButton(ok, null).show();
     }
 
     private void showIdentityDialog(AppItem item) {
@@ -1445,25 +1324,9 @@ public class AppPickerActivity extends AppCompatActivity {
                     .remove("identity_" + item.packageName).apply();
             json = null;
         }
-        // 文件存在但内容与本机完全相同（实际未伪装），也按未伪装处理，提示生成
-        if (json == null || !spoofed) {
-            String msg, btnGen, btnCancel;
-            if (zh) {
-                msg = "该应用暂无伪装值。\n可以立即生成一套随机伪装身份并写入，\n目标应用下次启动时将使用此身份。";
-                btnGen = "生成伪装值"; btnCancel = "取消";
-            } else if (en) {
-                msg = "No identity for this app yet.\nGenerate a random identity and write it now.\nThe target app will use it on next launch.";
-                btnGen = "Generate"; btnCancel = "Cancel";
-            } else {
-                msg = "Подмена для этого приложения ещё не задана.\nМожно сгенерировать случайную подмену и записать.\nПриложение использует её при следующем запуске.";
-                btnGen = "Сгенерировать"; btnCancel = "Отмена";
-            }
-            new AlertDialog.Builder(this)
-                    .setTitle(item.appName)
-                    .setMessage(msg)
-                    .setPositiveButton(btnGen, (d, w) -> generateAndWriteIdentity(item))
-                    .setNegativeButton(btnCancel, null)
-                    .show();
+        // 读不到任何身份文件 → 只提示模块会自动生成（已移除手动生成，不再写入干扰值）
+        if (json == null) {
+            showAutoOnlyInfo(item, zh, en);
             return;
         }
         Identity savedId = Identity.fromJson(item.identityJson);
@@ -1490,22 +1353,8 @@ public class AppPickerActivity extends AppCompatActivity {
         log("实际值来源 " + item.packageName + ": " + valueSource
                 + (id != null ? " aid=" + id.androidId + " brand=" + id.brand + " model=" + id.model : " 无"));
         if (id == null) {
-            // 三种来源都没有，提示生成
-            String msg, btnGen, btnCancel;
-            if (zh) {
-                msg = "该应用暂无伪装值。\n可以立即生成一套随机伪装身份并写入，\n目标应用下次启动时将使用此身份。";
-                btnGen = "生成伪装值"; btnCancel = "取消";
-            } else if (en) {
-                msg = "No identity for this app yet.\nGenerate a random identity and write it now.\nThe target app will use it on next launch.";
-                btnGen = "Generate"; btnCancel = "Cancel";
-            } else {
-                msg = "Подмена для этого приложения ещё не задана.\nМожно сгенерировать случайную подмену и записать.\nПриложение использует её при следующем запуске.";
-                btnGen = "Сгенерировать"; btnCancel = "Отмена";
-            }
-            new AlertDialog.Builder(this)
-                    .setTitle(item.appName).setMessage(msg)
-                    .setPositiveButton(btnGen, (d, w) -> generateAndWriteIdentity(item))
-                    .setNegativeButton(btnCancel, null).show();
+            // runtime/sentinel/日志三种来源都没有 → 只提示自动生成
+            showAutoOnlyInfo(item, zh, en);
             return;
         }
 
