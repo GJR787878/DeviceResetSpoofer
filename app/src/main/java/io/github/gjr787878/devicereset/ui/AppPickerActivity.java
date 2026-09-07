@@ -872,10 +872,10 @@ public class AppPickerActivity extends AppCompatActivity {
             java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
             // 用for循环遍历（find会被SELinux阻止进入其他用户目录）
             os.writeBytes("for u in /data/user/*/; do\n");
-            os.writeBytes("  d=\"$u").append(packageName).append("\"\n");
+            os.writeBytes("  d=\"$u" + packageName + "\"\n");
             os.writeBytes("  if [ -d \"$d\" ]; then echo \"$d\"; fi\n");
             os.writeBytes("done\n");
-            os.writeBytes("d='/data/data/").append(packageName).append("'\n");
+            os.writeBytes("d='/data/data/" + packageName + "'\n");
             os.writeBytes("if [ -d \"$d\" ]; then echo \"$d\"; fi\n");
             os.writeBytes("exit\n");
             os.flush();
