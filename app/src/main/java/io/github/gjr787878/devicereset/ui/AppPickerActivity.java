@@ -254,26 +254,20 @@ public class AppPickerActivity extends AppCompatActivity {
                         }
                     }
                 }
-                // 优先从SharedPreferences读取（UI自己生成的伪装值，无需root）
-                String json = getSharedPreferences("devicereset_ui", MODE_PRIVATE)
-                        .getString("identity_" + pkg, null);
+                // 先读哨兵文件（文件是真相来源），文件不存在说明清过数据，不显示旧值
+                String json = readIdentityFileWithRetry(pkg);
                 if (json != null && json.startsWith("{")) {
                     item.identityJson = json;
                     item.hasIdentity = true;
-                    log("从SharedPreferences读取到伪装值 " + pkg + " (" + json.length() + " bytes)");
+                    // 同步到SharedPreferences
+                    getSharedPreferences("devicereset_ui", MODE_PRIVATE).edit()
+                            .putString("identity_" + pkg, json).apply();
+                    log("从文件读取到伪装值 " + pkg + " (" + json.length() + " bytes)");
                 } else {
-                    // SharedPreferences没有，尝试从目标应用目录读取（模块自动生成的）
-                    json = readIdentityFileWithRetry(pkg);
-                    if (json != null && json.startsWith("{")) {
-                        item.identityJson = json;
-                        item.hasIdentity = true;
-                        // 同步保存到SharedPreferences
-                        getSharedPreferences("devicereset_ui", MODE_PRIVATE).edit()
-                                .putString("identity_" + pkg, json).apply();
-                        log("从目标目录读取到伪装值并同步到prefs " + pkg);
-                    } else {
-                        log("未检测到伪装值 " + pkg);
-                    }
+                    // 文件不存在或读取失败 → 清除旧的SharedPreferences缓存，显示无伪装值
+                    getSharedPreferences("devicereset_ui", MODE_PRIVATE).edit()
+                            .remove("identity_" + pkg).apply();
+                    log("文件不存在，清除旧缓存 " + pkg);
                 }
                 items.add(item);
                 log("已添加: " + pkg + " name=" + item.appName + " iconIsDefault=" + (item.icon == defaultIcon) + " hasIdentity=" + item.hasIdentity);
@@ -337,19 +331,29 @@ public class AppPickerActivity extends AppCompatActivity {
         }).start();
     }
 
-    /** 后台重新扫描所有应用的哨兵文件，发现模块自动生成的新身份则更新UI */
+    /** 后台重新扫描所有应用的哨兵文件，发现新身份则更新，文件消失则清除 */
     private void rescanIdentitiesFromFiles() {
         boolean changed = false;
         for (AppItem item : appList) {
             String json = readIdentityFile(item.packageName);
             if (json != null && json.startsWith("{")) {
-                // 与当前值对比，不同则更新
+                // 文件存在，与当前值对比，不同则更新
                 if (!json.equals(item.identityJson)) {
                     item.identityJson = json;
                     item.hasIdentity = true;
                     getSharedPreferences("devicereset_ui", MODE_PRIVATE).edit()
                             .putString("identity_" + item.packageName, json).apply();
                     log("重扫发现新身份 " + item.packageName + " (" + json.length() + " bytes)");
+                    changed = true;
+                }
+            } else {
+                // 文件不存在（清数据后），清除旧身份
+                if (item.hasIdentity) {
+                    item.identityJson = null;
+                    item.hasIdentity = false;
+                    getSharedPreferences("devicereset_ui", MODE_PRIVATE).edit()
+                            .remove("identity_" + item.packageName).apply();
+                    log("重扫发现文件已删除，清除身份 " + item.packageName);
                     changed = true;
                 }
             }
@@ -990,24 +994,20 @@ public class AppPickerActivity extends AppCompatActivity {
     private void showIdentityDialog(AppItem item) {
         boolean zh = LANG_ZH.equals(currentLang);
         boolean en = LANG_EN.equals(currentLang);
-        // 优先从内存 → SharedPreferences → 目标目录读取
-        String json = item.identityJson;
-        if (json == null) {
-            json = getSharedPreferences("devicereset_ui", MODE_PRIVATE)
-                    .getString("identity_" + item.packageName, null);
-            if (json != null) {
-                item.identityJson = json;
-                item.hasIdentity = true;
-            }
-        }
-        if (json == null) {
-            json = readIdentityFile(item.packageName);
-            if (json != null) {
-                item.identityJson = json;
-                item.hasIdentity = true;
-                getSharedPreferences("devicereset_ui", MODE_PRIVATE).edit()
-                        .putString("identity_" + item.packageName, json).apply();
-            }
+        // 先读哨兵文件（真相来源），文件不存在则清除旧缓存
+        String json = readIdentityFile(item.packageName);
+        if (json != null && json.startsWith("{")) {
+            item.identityJson = json;
+            item.hasIdentity = true;
+            getSharedPreferences("devicereset_ui", MODE_PRIVATE).edit()
+                    .putString("identity_" + item.packageName, json).apply();
+        } else {
+            // 文件不存在，清除旧缓存
+            item.identityJson = null;
+            item.hasIdentity = false;
+            getSharedPreferences("devicereset_ui", MODE_PRIVATE).edit()
+                    .remove("identity_" + item.packageName).apply();
+            json = null;
         }
         if (json == null) {
             String msg, btnGen, btnCancel;
