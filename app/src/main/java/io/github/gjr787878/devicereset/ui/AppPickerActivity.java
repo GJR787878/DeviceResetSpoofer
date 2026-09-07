@@ -1473,12 +1473,41 @@ public class AppPickerActivity extends AppCompatActivity {
             new AlertDialog.Builder(this).setTitle(title).setPositiveButton(ok, null).show();
             return;
         }
-        // 实际使用值优先级：①模块写的.identity_runtime文件 ②logcat里模块最后加载记录(免重启) ③已保存值
-        String runtimeJson = readRuntimeFile(item.packageName);
-        Identity runtimeId = Identity.fromJson(runtimeJson);
-        if (runtimeId == null) runtimeId = readRuntimeFromLogcat(item.packageName);
-        // 主显示：优先运行时实际值，没有则回退已保存值
-        Identity id = runtimeId != null ? runtimeId : savedId;
+        // 显示优先级（以app的files目录里存的完整值为准）：
+        // ①.identity_runtime 运行值(完整26字段) ②.identity_sentinel 已存完整值
+        // ③日志加载记录(仅androidId/brand/model三字段)只在两个文件都读不到时最后兜底，
+        //   避免日志里的旧残余覆盖目录里的权威完整值
+        Identity id = Identity.fromJson(readRuntimeFile(item.packageName));
+        String valueSource = "runtime文件";
+        if (id == null) {
+            id = savedId;
+            valueSource = "sentinel已存值";
+        }
+        if (id == null) {
+            id = readRuntimeFromLogcat(item.packageName);
+            valueSource = "日志兜底(仅3字段)";
+        }
+        log("实际值来源 " + item.packageName + ": " + valueSource
+                + (id != null ? " aid=" + id.androidId + " brand=" + id.brand + " model=" + id.model : " 无"));
+        if (id == null) {
+            // 三种来源都没有，提示生成
+            String msg, btnGen, btnCancel;
+            if (zh) {
+                msg = "该应用暂无伪装值。\n可以立即生成一套随机伪装身份并写入，\n目标应用下次启动时将使用此身份。";
+                btnGen = "生成伪装值"; btnCancel = "取消";
+            } else if (en) {
+                msg = "No identity for this app yet.\nGenerate a random identity and write it now.\nThe target app will use it on next launch.";
+                btnGen = "Generate"; btnCancel = "Cancel";
+            } else {
+                msg = "Подмена для этого приложения ещё не задана.\nМожно сгенерировать случайную подмену и записать.\nПриложение использует её при следующем запуске.";
+                btnGen = "Сгенерировать"; btnCancel = "Отмена";
+            }
+            new AlertDialog.Builder(this)
+                    .setTitle(item.appName).setMessage(msg)
+                    .setPositiveButton(btnGen, (d, w) -> generateAndWriteIdentity(item))
+                    .setNegativeButton(btnCancel, null).show();
+            return;
+        }
 
         String lApp = zh ? "应用" : en ? "App" : "Приложение";
         String lPkg = zh ? "包名" : en ? "Package" : "Пакет";
