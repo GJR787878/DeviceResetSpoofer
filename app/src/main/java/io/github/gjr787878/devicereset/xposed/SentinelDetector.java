@@ -73,7 +73,36 @@ public class SentinelDetector {
                 }
             }
 
-            // 哨兵不存在或读取失败 → 生成全新身份
+            // 内部哨兵不存在或解析失败 → 先尝试从外部备份恢复（保证与UI显示值一致，不另生成新身份）
+            if (externalDirPath != null) {
+                try {
+                    File extDir = new File(externalDirPath);
+                    File extSentinel = new File(extDir, SENTINEL_FILE);
+                    XposedBridge.log("[DeviceReset] 内部缺失，尝试外部备份 " + extSentinel.getAbsolutePath() + " exists=" + extSentinel.exists());
+                    if (extSentinel.exists()) {
+                        FileInputStream efis = new FileInputStream(extSentinel);
+                        byte[] ebuf = new byte[(int) extSentinel.length()];
+                        int eread = efis.read(ebuf);
+                        efis.close();
+                        String extJson = new String(ebuf, 0, eread, StandardCharsets.UTF_8);
+                        Identity extId = Identity.fromJson(extJson);
+                        if (extId != null && extId.androidId != null) {
+                            // 外部备份有效 → 回写内部，保持两处一致
+                            if (!filesDir.exists()) filesDir.mkdirs();
+                            boolean restoreOk = writeFile(sentinel, extJson);
+                            XposedBridge.log("[DeviceReset] 从外部备份恢复身份 " + (restoreOk ? "成功" : "失败") + " androidId=" + extId.androidId);
+                            cachedIdentity = extId;
+                            checked = true;
+                            return extId;
+                        }
+                        XposedBridge.log("[DeviceReset] 外部备份解析失败，将重新生成");
+                    }
+                } catch (Throwable extErr) {
+                    XposedBridge.log("[DeviceReset] 读取外部备份异常: " + extErr.getMessage());
+                }
+            }
+
+            // 内部、外部都没有 → 生成全新身份
             Identity newIdentity = IdentityGenerator.generateRandom();
             String jsonStr = newIdentity.toJson();
             if (!filesDir.exists()) {
