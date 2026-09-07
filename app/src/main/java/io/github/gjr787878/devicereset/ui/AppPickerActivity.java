@@ -574,10 +574,11 @@ public class AppPickerActivity extends AppCompatActivity {
                 } catch (Throwable e) {
                     full.append("logcat读取失败: ").append(e.getMessage()).append("\n");
                 }
-                // 也尝试读LSPosed日志文件
+                // 也尝试读LSPosed日志文件（遍历全部.log，日志轮转后旧记录在旧文件里，不能只读最新一个）
                 try {
                     Process lsp = Runtime.getRuntime().exec(new String[]{"su", "-c",
-                            "ls -t /data/adb/lspd/log/*.log 2>/dev/null | head -1 | xargs grep -iE 'DeviceReset|Sentinel|identity' 2>/dev/null | tail -30"});
+                            "echo '---所有日志文件---'; ls -t /data/adb/lspd/log/*.log 2>/dev/null; "
+                          + "echo '---Identity loaded记录---'; grep -h 'Identity loaded' /data/adb/lspd/log/*.log 2>/dev/null | tail -40"});
                     java.io.BufferedReader lr2 = new java.io.BufferedReader(
                             new java.io.InputStreamReader(lsp.getInputStream()));
                     String ll2;
@@ -1163,20 +1164,43 @@ public class AppPickerActivity extends AppCompatActivity {
     }
 
     /**
-     * logcat兜底：从LSPosed/Xposed日志解析该包最后一次 "Identity loaded: androidId=.., model=.., brand=.."。
-     * 即使没重启、新模块的.identity_runtime还没生成，旧模块启动时也会打这条日志，
-     * 从而拿到进程真正加载的值（仅androidId/brand/model等已打印字段）。
+     * 兜底读取进程实际加载值：模块启动时会打印
+     * "[DeviceReset] Identity loaded: androidId=.., model=.., brand=.."。
+     * 两个来源：①LSPosed持久化日志文件 /data/adb/lspd/log/*.log（跨时间保留，需遍历全部，
+     * 只读最新一个会因日志轮转漏掉旧记录）；②logcat实时环形缓冲（最近启动才有）。
+     * 优先实时logcat，没有再用持久化日志。
      */
     private Identity readRuntimeFromLogcat(String packageName) {
         try {
-            String script = "logcat -d 2>/dev/null | grep '" + packageName + "' | grep 'Identity loaded' | tail -1\n";
-            String line = execSuScriptWithTimeout(script, 8, "logcat运行时");
-            if (line == null || line.trim().isEmpty()) {
-                log("logcat无运行时记录 " + packageName);
+            StringBuilder script = new StringBuilder();
+            script.append("echo '===FILE==='\n");
+            script.append("grep -h 'Identity loaded' /data/adb/lspd/log/*.log 2>/dev/null")
+                  .append(" | grep '").append(packageName).append("' | tail -1\n");
+            script.append("echo '===LIVE==='\n");
+            script.append("logcat -d 2>/dev/null | grep '").append(packageName)
+                  .append("' | grep 'Identity loaded' | tail -1\n");
+            String out = execSuScriptWithTimeout(script.toString(), 10, "运行时日志");
+            if (out == null || out.trim().isEmpty()) {
+                log("运行时日志无记录 " + packageName);
                 return null;
             }
-            line = line.trim();
-            log("logcat运行时记录: " + line);
+            String fileLine = null, liveLine = null;
+            String mode = null;
+            for (String raw : out.split("\n")) {
+                String l = raw.trim();
+                if (l.contains("===FILE===")) { mode = "file"; continue; }
+                if (l.contains("===LIVE===")) { mode = "live"; continue; }
+                if (!l.contains("Identity loaded")) continue;
+                if ("live".equals(mode) && l.contains("androidId=")) liveLine = l;
+                else if ("file".equals(mode) && l.contains("androidId=")) fileLine = l;
+            }
+            // 优先实时（最近启动），其次持久化文件
+            String line = (liveLine != null) ? liveLine : fileLine;
+            if (line == null) {
+                log("运行时日志解析为空 " + packageName);
+                return null;
+            }
+            log("运行时实际加载记录[" + (liveLine != null ? "logcat" : "lspd日志") + "]: " + line);
             String aid = extractField(line, "androidId=", ',');
             if (aid == null || aid.isEmpty()) return null;
             Identity id = new Identity();
@@ -1186,7 +1210,7 @@ public class AppPickerActivity extends AppCompatActivity {
             id.manufacturer = id.brand;
             return id;
         } catch (Throwable e) {
-            log("logcat运行时解析异常: " + e.getMessage());
+            log("运行时日志解析异常: " + e.getMessage());
             return null;
         }
     }
