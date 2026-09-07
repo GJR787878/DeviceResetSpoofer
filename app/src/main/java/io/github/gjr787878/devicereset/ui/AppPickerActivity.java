@@ -107,9 +107,37 @@ public class AppPickerActivity extends AppCompatActivity {
         debugLog.append(msg).append("\n");
     }
 
+    /** Root预热：执行简单su命令确保权限就绪，最多等待5秒 */
+    private void ensureRootReady() {
+        for (int attempt = 0; attempt < 3; attempt++) {
+            try {
+                Process su = Runtime.getRuntime().exec("su");
+                java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
+                os.writeBytes("echo root_ready\n");
+                os.writeBytes("exit\n");
+                os.flush();
+                java.io.BufferedReader reader = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(su.getInputStream()));
+                String line = reader.readLine();
+                reader.close();
+                su.waitFor();
+                if ("root_ready".equals(line)) {
+                    log("Root就绪 (attempt " + (attempt+1) + ")");
+                    return;
+                }
+            } catch (Throwable e) {
+                log("Root预热失败 attempt " + (attempt+1) + ": " + e.getMessage());
+            }
+            try { Thread.sleep(500); } catch (Throwable ignored) {}
+        }
+        log("Root预热超时，继续执行");
+    }
+
     private void loadApps() {
         debugLog.setLength(0);
         new Thread(() -> {
+            // 0. Root预热：确保root权限就绪后再读取文件
+            ensureRootReady();
             // 1. 从 LSPosed 配置读取作用域
             Set<String> scopePkgs = readLSPosedScope();
             log("作用域读取结果: " + scopePkgs.size() + " 个 -> " + scopePkgs);
@@ -230,6 +258,11 @@ public class AppPickerActivity extends AppCompatActivity {
                 }
                 // 直接读取哨兵文件（不依赖扫描），并与原机真实值对比判断是否真的伪装了
                 String json = readIdentityFile(pkg);
+                if (json == null) {
+                    // 重试一次（root刚就绪时第一次调用可能失败）
+                    try { Thread.sleep(300); } catch (Throwable ignored) {}
+                    json = readIdentityFile(pkg);
+                }
                 if (json != null) {
                     Identity id = Identity.fromJson(json);
                     if (id != null && isIdentitySpoofed(id)) {
