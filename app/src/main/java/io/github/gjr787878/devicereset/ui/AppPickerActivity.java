@@ -262,8 +262,7 @@ public class AppPickerActivity extends AppCompatActivity {
                     rvApps.setVisibility(View.GONE);
                 } else {
                     tvEmpty.setVisibility(View.GONE);
-                    tvDebug.setText(debugLog.toString());
-                    tvDebug.setVisibility(View.VISIBLE);
+                    tvDebug.setVisibility(View.GONE);
                     rvApps.setVisibility(View.VISIBLE);
                     int withVal = 0;
                     for (AppItem i : finalItems) if (i.hasIdentity) withVal++;
@@ -942,35 +941,75 @@ public class AppPickerActivity extends AppCompatActivity {
         String lFp = zh ? "指纹" : en ? "Fingerprint" : "Отпечаток";
         String lCarrier = zh ? "运营商" : en ? "Carrier" : "Оператор";
         String lCarrierCode = zh ? "运营商代码" : en ? "Carrier Code" : "Код оператора";
-        String lTitle = zh ? "当前伪装值" : en ? "Current Identity" : "Текущая подмена";
+        String lTitle = zh ? "当前伪装值（伪装 → 原始）" : en ? "Current Identity (spoofed → original)" : "Текущая подмена (подмена → оригинал)";
         String ok = zh ? "确定" : en ? "OK" : "ОК";
+        String lOriginal = zh ? "原始" : en ? "orig" : "ориг";
+
+        // 获取设备原始值
+        String origAndroidId = "";
+        String origBrand = android.os.Build.BRAND;
+        String origModel = android.os.Build.MODEL;
+        String origMfr = android.os.Build.MANUFACTURER;
+        String origFp = android.os.Build.FINGERPRINT;
+        String origSerial = android.os.Build.SERIAL;
+        String origMac = "";
+        String origCarrier = "";
+        String origCarrierCode = "";
+        try {
+            origAndroidId = android.provider.Settings.Secure.getString(getContentResolver(), android.provider.Settings.Secure.ANDROID_ID);
+        } catch (Throwable ignored) {}
+        try {
+            android.net.wifi.WifiManager wm = (android.net.wifi.WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
+            if (wm != null) origMac = wm.getConnectionInfo().getMacAddress();
+        } catch (Throwable ignored) {}
+        try {
+            android.telephony.TelephonyManager tm = (android.telephony.TelephonyManager) getSystemService(TELEPHONY_SERVICE);
+            if (tm != null) {
+                origCarrier = tm.getNetworkOperatorName();
+                origCarrierCode = tm.getNetworkOperator();
+            }
+        } catch (Throwable ignored) {}
 
         StringBuilder sb = new StringBuilder();
         sb.append(lApp).append(": ").append(item.appName).append("\n");
         sb.append(lPkg).append(": ").append(item.packageName).append("\n\n");
-        if (id.androidId != null) sb.append("Android ID: ").append(id.androidId).append("\n");
-        if (id.advertisingId != null) sb.append(lAdId).append(": ").append(id.advertisingId).append("\n");
-        if (id.appSetId != null) sb.append("AppSet ID: ").append(id.appSetId).append("\n");
-        if (id.imei != null) sb.append("IMEI: ").append(id.imei).append("\n");
-        if (id.meid != null) sb.append("MEID: ").append(id.meid).append("\n");
-        if (id.serial != null) sb.append(lSerial).append(": ").append(id.serial).append("\n");
-        if (id.macAddress != null) sb.append("MAC: ").append(id.macAddress).append("\n");
-        if (id.gsfId != null) sb.append("GSF ID: ").append(id.gsfId).append("\n");
+        appendCompare(sb, "Android ID", id.androidId, origAndroidId);
+        appendCompare(sb, lAdId, id.advertisingId, "—");
+        if (id.appSetId != null) appendCompare(sb, "AppSet ID", id.appSetId, "—");
+        appendCompare(sb, "IMEI", id.imei, "—");
+        if (id.meid != null) appendCompare(sb, "MEID", id.meid, "—");
+        appendCompare(sb, lSerial, id.serial, origSerial);
+        appendCompare(sb, "MAC", id.macAddress, origMac);
+        if (id.gsfId != null) appendCompare(sb, "GSF ID", id.gsfId, "—");
         sb.append("\n");
-        if (id.brand != null) sb.append(lBrand).append(": ").append(id.brand).append("\n");
-        if (id.model != null) sb.append(lModel).append(": ").append(id.model).append("\n");
-        if (id.manufacturer != null) sb.append(lMfr).append(": ").append(id.manufacturer).append("\n");
-        if (id.fingerprint != null) sb.append(lFp).append(": ").append(id.fingerprint).append("\n");
-        if (id.buildId != null) sb.append("Build ID: ").append(id.buildId).append("\n");
+        appendCompare(sb, lBrand, id.brand, origBrand);
+        appendCompare(sb, lModel, id.model, origModel);
+        appendCompare(sb, lMfr, id.manufacturer, origMfr);
+        appendCompare(sb, lFp, id.fingerprint, origFp);
+        if (id.buildId != null) appendCompare(sb, "Build ID", id.buildId, android.os.Build.ID);
         sb.append("\n");
-        if (id.networkOperatorName != null) sb.append(lCarrier).append(": ").append(id.networkOperatorName).append("\n");
-        if (id.networkOperator != null) sb.append(lCarrierCode).append(": ").append(id.networkOperator).append("\n");
+        appendCompare(sb, lCarrier, id.networkOperatorName, origCarrier);
+        appendCompare(sb, lCarrierCode, id.networkOperator, origCarrierCode);
 
         new AlertDialog.Builder(this)
                 .setTitle(lTitle)
                 .setMessage(sb.toString())
                 .setPositiveButton(ok, null)
                 .show();
+    }
+
+    /** 追加一行对比：伪装值 → 原始值，不同则标记 */
+    private void appendCompare(StringBuilder sb, String label, String spoofed, String original) {
+        if (spoofed == null) return;
+        sb.append(label).append(": ").append(spoofed);
+        if (original != null && !original.isEmpty() && !original.equals("—")) {
+            if (!spoofed.equals(original)) {
+                sb.append("  →  ").append(original).append(" ✗");
+            } else {
+                sb.append("  ✓");
+            }
+        }
+        sb.append("\n");
     }
 
     // ==================== Adapter ====================
