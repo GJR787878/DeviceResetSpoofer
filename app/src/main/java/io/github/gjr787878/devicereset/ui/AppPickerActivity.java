@@ -794,64 +794,53 @@ public class AppPickerActivity extends AppCompatActivity {
     }
 
     private String readIdentityFile(String packageName) {
-        String tmpPath = "/data/local/tmp/drs_read_" + System.currentTimeMillis();
-        try {
-            // 直接遍历已知用户ID，不依赖通配符展开
-            int[] userIds = {0, 10, 11, 12, 13, 14, 15};
-            StringBuilder script = new StringBuilder();
-            script.append("FOUND=''\n");
-            for (int uid : userIds) {
-                String f = "/data/user/" + uid + "/" + packageName + "/files/.identity_sentinel";
-                script.append("if [ -f '").append(f).append("' ]; then\n");
-                script.append("  echo 'FOUND: ").append(f).append("'\n");
-                script.append("  dd if='").append(f).append("' of='").append(tmpPath).append("' bs=65536 2>/dev/null\n");
-                script.append("  chmod 666 '").append(tmpPath).append("' 2>/dev/null\n");
-                script.append("  FOUND='").append(f).append("'\n");
-                script.append("fi\n");
-            }
-            // 也检查 /data/data/
-            String f2 = "/data/data/" + packageName + "/files/.identity_sentinel";
-            script.append("if [ -f '").append(f2).append("' ] && [ -z \"$FOUND\" ]; then\n");
-            script.append("  echo 'FOUND: ").append(f2).append("'\n");
-            script.append("  dd if='").append(f2).append("' of='").append(tmpPath).append("' bs=65536 2>/dev/null\n");
-            script.append("  chmod 666 '").append(tmpPath).append("' 2>/dev/null\n");
-            script.append("fi\n");
-            script.append("echo 'DONE'\n");
-            script.append("exit\n");
-
-            Process su = Runtime.getRuntime().exec("su");
-            java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
-            os.writeBytes(script.toString());
-            os.flush();
-            java.io.BufferedReader reader = new java.io.BufferedReader(
-                    new java.io.InputStreamReader(su.getInputStream()));
-            StringBuilder diag = new StringBuilder();
-            String line;
-            while ((line = reader.readLine()) != null) {
-                diag.append(line).append("\n");
-            }
-            reader.close();
-            su.waitFor();
-            log("读取诊断 " + packageName + ": " + diag.toString().replace("\n", " | "));
-
-            File tmpFile = new File(tmpPath);
-            if (tmpFile.exists() && tmpFile.length() > 0) {
-                byte[] data = java.nio.file.Files.readAllBytes(tmpFile.toPath());
-                String output = new String(data, StandardCharsets.UTF_8).trim();
-                tmpFile.delete();
-                if (!output.isEmpty() && output.startsWith("{")) {
-                    log("成功读取伪装值 " + packageName + " (" + output.length() + " bytes)");
-                    return output;
-                } else {
-                    log("文件内容不是JSON: " + output.substring(0, Math.min(100, output.length())));
-                }
-            } else {
-                log("临时文件不存在或为空: " + tmpPath);
-            }
-        } catch (Throwable e) {
-            log("读取异常 " + packageName + ": " + e.getMessage());
+        // 构建所有可能的路径
+        List<String> paths = new ArrayList<>();
+        int[] userIds = {0, 10, 11, 12, 13, 14, 15};
+        for (int uid : userIds) {
+            paths.add("/data/user/" + uid + "/" + packageName + "/files/.identity_sentinel");
+            paths.add("/data/user_de/" + uid + "/" + packageName + "/files/.identity_sentinel");
         }
-        log("未读取到伪装值 " + packageName);
+        paths.add("/data/data/" + packageName + "/files/.identity_sentinel");
+
+        for (String path : paths) {
+            try {
+                Process su = Runtime.getRuntime().exec("su");
+                java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
+                // 先检查文件是否存在，存在则cat输出
+                os.writeBytes("if [ -f '" + path + "' ]; then\n");
+                os.writeBytes("  echo 'BEGIN_DRS_IDENTITY'\n");
+                os.writeBytes("  cat '" + path + "'\n");
+                os.writeBytes("  echo ''\n");
+                os.writeBytes("  echo 'END_DRS_IDENTITY'\n");
+                os.writeBytes("fi\n");
+                os.writeBytes("exit\n");
+                os.flush();
+                java.io.BufferedReader reader = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(su.getInputStream()));
+                StringBuilder sb = new StringBuilder();
+                boolean capturing = false;
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (line.equals("BEGIN_DRS_IDENTITY")) {
+                        capturing = true;
+                        continue;
+                    }
+                    if (line.equals("END_DRS_IDENTITY")) break;
+                    if (capturing) sb.append(line).append("\n");
+                }
+                reader.close();
+                su.waitFor();
+                String content = sb.toString().trim();
+                if (content.startsWith("{")) {
+                    log("成功读取 " + path + " (" + content.length() + " bytes)");
+                    return content;
+                }
+            } catch (Throwable e) {
+                log("读取失败 " + path + ": " + e.getMessage());
+            }
+        }
+        log("所有路径均未读取到伪装值 " + packageName);
         return null;
     }
 
