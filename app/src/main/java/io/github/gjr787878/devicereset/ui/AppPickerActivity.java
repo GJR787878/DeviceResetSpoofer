@@ -228,9 +228,19 @@ public class AppPickerActivity extends AppCompatActivity {
                         }
                     }
                 }
-                item.hasIdentity = identityPkgs.contains(pkg);
-                if (item.hasIdentity) {
-                    item.identityJson = readIdentityFile(pkg);
+                // 直接读取哨兵文件（不依赖扫描），并与原机真实值对比判断是否真的伪装了
+                String json = readIdentityFile(pkg);
+                if (json != null) {
+                    Identity id = Identity.fromJson(json);
+                    if (id != null && isIdentitySpoofed(id)) {
+                        item.identityJson = json;
+                        item.hasIdentity = true;
+                        log("检测到伪装值 " + pkg + " androidId=" + id.androidId + " brand=" + id.brand);
+                    } else {
+                        log("哨兵文件存在但值与原机相同或解析失败 " + pkg);
+                    }
+                } else {
+                    log("未读取到哨兵文件 " + pkg);
                 }
                 items.add(item);
                 log("已添加: " + pkg + " name=" + item.appName + " iconIsDefault=" + (item.icon == defaultIcon) + " hasIdentity=" + item.hasIdentity);
@@ -1011,6 +1021,28 @@ public class AppPickerActivity extends AppCompatActivity {
                 .setMessage(sb.toString())
                 .setPositiveButton(ok, null)
                 .show();
+    }
+
+    /** 对比身份值与原机真实值，关键字段不同则认为已伪装 */
+    private boolean isIdentitySpoofed(Identity id) {
+        if (id == null) return false;
+        // Android ID 对比
+        try {
+            String origAndroidId = android.provider.Settings.Secure.getString(getContentResolver(), android.provider.Settings.Secure.ANDROID_ID);
+            if (id.androidId != null && !id.androidId.equals(origAndroidId)) return true;
+        } catch (Throwable ignored) {}
+        // 品牌对比
+        if (id.brand != null && !id.brand.equalsIgnoreCase(android.os.Build.BRAND)) return true;
+        // 型号对比
+        if (id.model != null && !id.model.equals(android.os.Build.MODEL)) return true;
+        // 厂商对比
+        if (id.manufacturer != null && !id.manufacturer.equalsIgnoreCase(android.os.Build.MANUFACTURER)) return true;
+        // 指纹对比
+        if (id.fingerprint != null && !id.fingerprint.equals(android.os.Build.FINGERPRINT)) return true;
+        // IMEI 对比（有值且非空通常就是伪装的）
+        if (id.imei != null && !id.imei.isEmpty()) return true;
+        // 只要有任意关键字段不同就返回true
+        return false;
     }
 
     /** 追加一行对比：伪装值 → 原始值，不同则标记 */
