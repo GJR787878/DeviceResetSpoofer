@@ -344,7 +344,7 @@ public class AppPickerActivity extends AppCompatActivity {
         }).start();
     }
 
-    /** 后台重新扫描所有应用的哨兵文件，发现新身份则更新，文件消失则清除 */
+    /** 后台重新扫描所有应用的哨兵文件，发现新身份则更新，确认文件消失才清除 */
     private void rescanIdentitiesFromFiles() {
         boolean changed = false;
         for (AppItem item : appList) {
@@ -360,17 +360,18 @@ public class AppPickerActivity extends AppCompatActivity {
                     log("重扫发现身份 " + item.packageName + " (" + json.length() + " bytes) 与本机不同=" + spoofed);
                     changed = true;
                 }
-            } else {
-                // 文件不存在（清数据后），清除旧身份
+            } else if (json != null && json.isEmpty()) {
+                // 明确确认所有路径都没有文件（清数据后）→ 才清除旧身份
                 if (item.hasIdentity) {
                     item.identityJson = null;
                     item.hasIdentity = false;
                     getSharedPreferences("devicereset_ui", MODE_PRIVATE).edit()
                             .remove("identity_" + item.packageName).apply();
-                    log("重扫发现文件已删除，清除身份 " + item.packageName);
+                    log("重扫确认文件已删除，清除身份 " + item.packageName);
                     changed = true;
                 }
             }
+            // json == null：读取超时/出错/不确定 → 保留当前状态，绝不清零（防止su抖动把已读到的值清掉）
         }
         if (changed) {
             runOnUiThread(() -> {
@@ -1115,7 +1116,13 @@ public class AppPickerActivity extends AppCompatActivity {
                     return content;
                 }
             }
-            log(kind + "所有路径均无文件 " + tag);
+            // 明确收到 DRS_NONE = 所有路径确实都没有文件 → 返回空串(区别于读取失败null)
+            if (all.contains("===DRS_NONE===")) {
+                log(kind + "确认无文件 " + tag);
+                return "";
+            }
+            // 输出为空/无标记 = su异常或被中断，返回null表示"不确定"，调用方不得据此清空已有值
+            log(kind + "读取结果不确定(保留原值) " + tag + " out=" + all.substring(0, Math.min(40, all.length())));
             return null;
         } catch (Throwable ex) {
             log(kind + "读取异常 " + tag + ": " + ex.getMessage());
@@ -1124,11 +1131,12 @@ public class AppPickerActivity extends AppCompatActivity {
         }
     }
 
-    /** 带重试的读取，最多2次 */
+    /** 带重试的读取，最多2次；确认无文件(空串)立即返回，超时/出错返回null */
     private String readIdentityFileWithRetry(String packageName) {
         for (int i = 0; i < 2; i++) {
             String json = readIdentityFile(packageName);
             if (json != null && json.startsWith("{")) return json;
+            if (json != null && json.isEmpty()) return ""; // 明确无文件，不必重试
             try { Thread.sleep(300); } catch (Throwable ignored) {}
         }
         return null;
@@ -1335,19 +1343,22 @@ public class AppPickerActivity extends AppCompatActivity {
     private void showIdentityDialog(AppItem item) {
         boolean zh = LANG_ZH.equals(currentLang);
         boolean en = LANG_EN.equals(currentLang);
-        // 先读哨兵文件（真相来源），快速重试3次避免时机问题误判为"无伪装值"
+        // 先重新读哨兵文件；读取不确定(null)时回退列表已读到的值，不轻易判定为无
         String json = readIdentityFileWithRetry(item.packageName);
+        if (json == null && item.identityJson != null) {
+            // 本次读取超时/出错，沿用列表扫描时已读到的值
+            json = item.identityJson;
+            log("点击时读取不确定，沿用已缓存值 " + item.packageName + " (" + json.length() + " bytes)");
+        }
         boolean spoofed = false;
         if (json != null && json.startsWith("{")) {
             spoofed = isActuallySpoofed(json);
-        }
-        if (json != null && json.startsWith("{")) {
             item.identityJson = json;
             item.hasIdentity = spoofed;
             getSharedPreferences("devicereset_ui", MODE_PRIVATE).edit()
                     .putString("identity_" + item.packageName, json).apply();
         } else {
-            // 文件不存在，清除旧缓存
+            // 明确确认无文件（""），清除旧缓存
             item.identityJson = null;
             item.hasIdentity = false;
             getSharedPreferences("devicereset_ui", MODE_PRIVATE).edit()
