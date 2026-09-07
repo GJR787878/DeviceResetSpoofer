@@ -641,8 +641,9 @@ public class AppPickerActivity extends AppCompatActivity {
         try {
             Process su = Runtime.getRuntime().exec("su");
             java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
-            // 同时扫描 /data/data/ 和 /data/user/0/
-            os.writeBytes("for d in /data/data/*/ /data/user/0/*/; do pkg=$(basename \"$d\"); if [ -f \"$d/files/.identity_sentinel\" ]; then echo \"$pkg\"; fi; done 2>/dev/null\n");
+            // 用 find 在所有用户目录下搜索哨兵文件，提取包名
+            os.writeBytes("find /data/user/ -maxdepth 4 -name '.identity_sentinel' 2>/dev/null | while read f; do echo \"$f\" | sed -n 's|.*/data/user/[0-9]*/\\([^/]*\\)/files/.*|\\1|p'; done\n");
+            os.writeBytes("find /data/data/ -maxdepth 3 -name '.identity_sentinel' 2>/dev/null | while read f; do echo \"$f\" | sed -n 's|.*/data/data/\\([^/]*\\)/files/.*|\\1|p'; done\n");
             os.writeBytes("exit\n");
             os.flush();
             java.io.BufferedReader reader = new java.io.BufferedReader(
@@ -650,37 +651,33 @@ public class AppPickerActivity extends AppCompatActivity {
             String line;
             while ((line = reader.readLine()) != null) {
                 line = line.trim();
-                if (!line.isEmpty()) result.add(line);
+                if (!line.isEmpty() && isValidPackageName(line)) result.add(line);
             }
             reader.close();
             su.waitFor();
-        } catch (Throwable ignored) {}
+        } catch (Throwable e) {
+            log("哨兵扫描异常: " + e.getMessage());
+        }
         log("哨兵扫描结果: " + result);
         return result;
     }
 
     private String readIdentityFile(String packageName) {
-        String[] paths = {
-                "/data/data/" + packageName + "/files/.identity_sentinel",
-                "/data/user/0/" + packageName + "/files/.identity_sentinel",
-        };
+        // 先用 find 在所有用户目录下定位哨兵文件（支持工作profile/多用户）
+        List<String> foundPaths = findSentinelPaths(packageName);
+        log("find定位到 " + packageName + " 的哨兵文件: " + foundPaths);
+
         String tmpPath = "/data/local/tmp/drs_identity_" + System.currentTimeMillis();
-        for (String path : paths) {
+        for (String path : foundPaths) {
             try {
-                // 用 dd 复制到 /data/local/tmp/（和读取 LSPosed 数据库相同的可靠方式）
                 Process su = Runtime.getRuntime().exec("su");
                 java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
                 os.writeBytes("dd if='" + path + "' of='" + tmpPath + "' bs=65536 2>/dev/null\n");
                 os.writeBytes("chmod 666 '" + tmpPath + "' 2>/dev/null\n");
-                os.writeBytes("ls -l '" + tmpPath + "' 2>/dev/null\n");
                 os.writeBytes("exit\n");
                 os.flush();
-                // 读取 ls 输出确认
                 java.io.BufferedReader reader = new java.io.BufferedReader(
                         new java.io.InputStreamReader(su.getInputStream()));
-                StringBuilder lsOut = new StringBuilder();
-                String line;
-                while ((line = reader.readLine()) != null) lsOut.append(line);
                 reader.close();
                 su.waitFor();
 
@@ -693,15 +690,41 @@ public class AppPickerActivity extends AppCompatActivity {
                         log("读取到伪装值 " + packageName + " 从 " + path + " (" + output.length() + " bytes)");
                         return output;
                     }
-                } else {
-                    log("读取失败 " + packageName + " 路径=" + path + " ls=" + lsOut);
                 }
             } catch (Throwable e) {
-                log("读取异常 " + packageName + ": " + e.getMessage());
+                log("读取异常 " + packageName + " " + path + ": " + e.getMessage());
             }
         }
         log("未读取到伪装值 " + packageName);
         return null;
+    }
+
+    /** 用 root find 在所有用户目录下定位目标应用的哨兵文件 */
+    private List<String> findSentinelPaths(String packageName) {
+        List<String> paths = new ArrayList<>();
+        try {
+            Process su = Runtime.getRuntime().exec("su");
+            java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
+            // 在 /data/user/ 下所有用户目录搜索，同时也搜 /data/data/
+            os.writeBytes("find /data/user/ -maxdepth 4 -path '*/" + packageName + "/files/.identity_sentinel' 2>/dev/null\n");
+            os.writeBytes("find /data/data/ -maxdepth 3 -path '*/" + packageName + "/files/.identity_sentinel' 2>/dev/null\n");
+            os.writeBytes("exit\n");
+            os.flush();
+            java.io.BufferedReader reader = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(su.getInputStream()));
+            String line;
+            while ((line = reader.readLine()) != null) {
+                line = line.trim();
+                if (!line.isEmpty() && line.endsWith(".identity_sentinel") && !paths.contains(line)) {
+                    paths.add(line);
+                }
+            }
+            reader.close();
+            su.waitFor();
+        } catch (Throwable e) {
+            log("find哨兵文件失败 " + packageName + ": " + e.getMessage());
+        }
+        return paths;
     }
 
     /** 生成随机身份并写入目标应用的哨兵文件 */
@@ -737,19 +760,23 @@ public class AppPickerActivity extends AppCompatActivity {
         }).start();
     }
 
-    /** 通过 root 将身份 JSON 写入目标应用的哨兵文件 */
+    /** 通过 root 将身份 JSON 写入目标应用的哨兵文件（所有用户目录） */
     private boolean writeIdentityFile(String packageName, String json) {
-        String[] dirs = {
-                "/data/data/" + packageName + "/files",
-                "/data/user/0/" + packageName + "/files",
-        };
-        // 先写到临时文件
+        // 先找到目标应用在所有用户下的 files 目录
+        List<String> dirs = findAppFilesDirs(packageName);
+        log("写入目标目录 " + packageName + ": " + dirs);
+        if (dirs.isEmpty()) {
+            log("未找到目标应用的任何数据目录，写入失败");
+            return false;
+        }
+
         String tmpPath = null;
         try {
             File tmpFile = new File(getCacheDir(), "drs_write_" + System.currentTimeMillis() + ".json");
             java.nio.file.Files.write(tmpFile.toPath(), json.getBytes(StandardCharsets.UTF_8));
             tmpPath = tmpFile.getAbsolutePath();
 
+            boolean anySuccess = false;
             for (String dir : dirs) {
                 try {
                     Process su = Runtime.getRuntime().exec("su");
@@ -768,21 +795,48 @@ public class AppPickerActivity extends AppCompatActivity {
                     reader.close();
                     su.waitFor();
                     log("写入结果 " + dir + ": " + out);
-                    // 验证
-                    String verify = readIdentityFile(packageName);
-                    if (verify != null) {
-                        tmpFile.delete();
-                        return true;
-                    }
+                    if (out.toString().contains(".identity_sentinel")) anySuccess = true;
                 } catch (Throwable e) {
                     log("写入异常 " + dir + ": " + e.getMessage());
                 }
             }
             if (tmpPath != null) new File(tmpPath).delete();
+            if (anySuccess) {
+                // 验证读取
+                String verify = readIdentityFile(packageName);
+                return verify != null;
+            }
         } catch (Throwable e) {
             log("写入身份异常: " + e.getMessage());
         }
         return false;
+    }
+
+    /** 用 root find 定位目标应用在所有用户下的 files 目录 */
+    private List<String> findAppFilesDirs(String packageName) {
+        List<String> dirs = new ArrayList<>();
+        try {
+            Process su = Runtime.getRuntime().exec("su");
+            java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
+            os.writeBytes("find /data/user/ -maxdepth 3 -type d -path '*/" + packageName + "/files' 2>/dev/null\n");
+            os.writeBytes("find /data/data/ -maxdepth 2 -type d -path '*/" + packageName + "/files' 2>/dev/null\n");
+            os.writeBytes("exit\n");
+            os.flush();
+            java.io.BufferedReader reader = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(su.getInputStream()));
+            String line;
+            while ((line = reader.readLine()) != null) {
+                line = line.trim();
+                if (!line.isEmpty() && line.endsWith("/files") && !dirs.contains(line)) {
+                    dirs.add(line);
+                }
+            }
+            reader.close();
+            su.waitFor();
+        } catch (Throwable e) {
+            log("find files目录失败 " + packageName + ": " + e.getMessage());
+        }
+        return dirs;
     }
 
     private void showIdentityDialog(AppItem item) {
