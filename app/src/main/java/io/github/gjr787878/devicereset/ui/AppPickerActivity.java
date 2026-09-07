@@ -381,16 +381,85 @@ public class AppPickerActivity extends AppCompatActivity {
         }
     }
 
-    /** 将诊断日志写入 /sdcard/Download/111 */
+    /** 将诊断日志（含本机真实值+伪装值对比）写入 /sdcard/Download/111 */
     private void writeDiagToDownload() {
         new Thread(() -> {
             try {
-                String logContent = debugLog.toString();
+                StringBuilder full = new StringBuilder();
+                full.append("========== DeviceResetSpoofer 诊断日志 ==========\n");
+                full.append("时间: ").append(new java.util.Date().toString()).append("\n\n");
+
+                // 1. 本机真实值
+                full.append("========== 本机真实值 ==========\n");
+                try {
+                    String androidId = android.provider.Settings.Secure.getString(
+                            getContentResolver(), android.provider.Settings.Secure.ANDROID_ID);
+                    full.append("Android ID: ").append(androidId).append("\n");
+                } catch (Throwable e) {
+                    full.append("Android ID: 读取失败 ").append(e.getMessage()).append("\n");
+                }
+                full.append("品牌(BRAND): ").append(android.os.Build.BRAND).append("\n");
+                full.append("型号(MODEL): ").append(android.os.Build.MODEL).append("\n");
+                full.append("厂商(MANUFACTURER): ").append(android.os.Build.MANUFACTURER).append("\n");
+                full.append("设备(DEVICE): ").append(android.os.Build.DEVICE).append("\n");
+                full.append("产品(PRODUCT): ").append(android.os.Build.PRODUCT).append("\n");
+                full.append("硬件(HARDWARE): ").append(android.os.Build.HARDWARE).append("\n");
+                full.append("指纹(FINGERPRINT): ").append(android.os.Build.FINGERPRINT).append("\n");
+                full.append("Build ID: ").append(android.os.Build.ID).append("\n");
+                full.append("Bootloader: ").append(android.os.Build.BOOTLOADER).append("\n");
+                full.append("RadioVersion: ").append(android.os.Build.getRadioVersion()).append("\n");
+                full.append("Build Time: ").append(new java.util.Date(android.os.Build.TIME).toString()).append("\n");
+                full.append("\n");
+
+                // 2. 每个应用的伪装值
+                full.append("========== 作用域应用伪装值 ==========\n");
+                for (AppItem item : appList) {
+                    full.append("\n--- ").append(item.appName).append(" (").append(item.packageName).append(") ---\n");
+                    // 重新读取哨兵文件
+                    String json = readIdentityFile(item.packageName);
+                    if (json != null && json.startsWith("{")) {
+                        full.append("哨兵文件: 存在 (").append(json.length()).append(" bytes)\n");
+                        full.append("伪装值JSON:\n").append(json).append("\n");
+                        // 解析并对比
+                        try {
+                            org.json.JSONObject obj = new org.json.JSONObject(json);
+                            full.append("\n--- 关键字段对比 ---\n");
+                            full.append("Android ID: 伪装=").append(obj.optString("androidId", "?"))
+                                    .append(" | 真实=").append(android.provider.Settings.Secure.getString(
+                                            getContentResolver(), android.provider.Settings.Secure.ANDROID_ID)).append("\n");
+                            full.append("品牌: 伪装=").append(obj.optString("brand", "?"))
+                                    .append(" | 真实=").append(android.os.Build.BRAND).append("\n");
+                            full.append("型号: 伪装=").append(obj.optString("model", "?"))
+                                    .append(" | 真实=").append(android.os.Build.MODEL).append("\n");
+                            full.append("厂商: 伪装=").append(obj.optString("manufacturer", "?"))
+                                    .append(" | 真实=").append(android.os.Build.MANUFACTURER).append("\n");
+                            full.append("指纹: 伪装=").append(obj.optString("fingerprint", "?"))
+                                    .append("\n  真实=").append(android.os.Build.FINGERPRINT).append("\n");
+                            full.append("IMEI: 伪装=").append(obj.optString("imei", "?")).append("\n");
+                            full.append("序列号: 伪装=").append(obj.optString("serial", "?")).append("\n");
+                            full.append("MAC: 伪装=").append(obj.optString("macAddress", "?")).append("\n");
+                        } catch (Throwable e) {
+                            full.append("JSON解析失败: ").append(e.getMessage()).append("\n");
+                        }
+                    } else {
+                        full.append("哨兵文件: 不存在（该应用未生成伪装值，或数据已被清除）\n");
+                    }
+                    full.append("UI状态: hasIdentity=").append(item.hasIdentity)
+                            .append(", identityJson长度=").append(item.identityJson == null ? 0 : item.identityJson.length()).append("\n");
+                }
+                full.append("\n");
+
+                // 3. 原始调试日志
+                full.append("========== 调试日志 ==========\n");
+                full.append(debugLog.toString());
+
+                // 写入文件
+                String content = full.toString();
                 Process su = Runtime.getRuntime().exec("su");
                 java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
                 os.writeBytes("mkdir -p /sdcard/Download\n");
                 os.writeBytes("cat > /sdcard/Download/111 << 'DRS_DIAG_EOF'\n");
-                os.writeBytes(logContent + "\n");
+                os.writeBytes(content + "\n");
                 os.writeBytes("DRS_DIAG_EOF\n");
                 os.writeBytes("chmod 666 /sdcard/Download/111\n");
                 os.writeBytes("ls -l /sdcard/Download/111\n");
