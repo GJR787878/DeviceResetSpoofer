@@ -855,9 +855,8 @@ public class AppPickerActivity extends AppCompatActivity {
         }).start();
     }
 
-    /** 通过 root 将身份 JSON 写入目标应用的哨兵文件（所有用户目录） */
+    /** 通过 root 用 heredoc 直接写入身份 JSON（所有用户目录），不经过App私有目录避免SELinux问题 */
     private boolean writeIdentityFile(String packageName, String json) {
-        // 先找到目标应用在所有用户下的 files 目录
         List<String> dirs = findAppFilesDirs(packageName);
         log("写入目标目录 " + packageName + ": " + dirs);
         if (dirs.isEmpty()) {
@@ -865,44 +864,47 @@ public class AppPickerActivity extends AppCompatActivity {
             return false;
         }
 
-        String tmpPath = null;
-        try {
-            File tmpFile = new File(getCacheDir(), "drs_write_" + System.currentTimeMillis() + ".json");
-            java.nio.file.Files.write(tmpFile.toPath(), json.getBytes(StandardCharsets.UTF_8));
-            tmpPath = tmpFile.getAbsolutePath();
-
-            boolean anySuccess = false;
-            for (String dir : dirs) {
-                try {
-                    Process su = Runtime.getRuntime().exec("su");
-                    java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
-                    os.writeBytes("mkdir -p '" + dir + "'\n");
-                    os.writeBytes("cp '" + tmpPath + "' '" + dir + "/.identity_sentinel'\n");
-                    os.writeBytes("chmod 666 '" + dir + "/.identity_sentinel'\n");
-                    os.writeBytes("if [ -f '" + dir + "/.identity_sentinel' ]; then echo 'OK:'$(wc -c < '" + dir + "/.identity_sentinel'); else echo 'FAIL'; fi\n");
-                    os.writeBytes("exit\n");
-                    os.flush();
-                    java.io.BufferedReader reader = new java.io.BufferedReader(
-                            new java.io.InputStreamReader(su.getInputStream()));
-                    StringBuilder out = new StringBuilder();
-                    String line;
-                    while ((line = reader.readLine()) != null) out.append(line);
-                    reader.close();
-                    su.waitFor();
-                    log("写入结果 " + dir + ": " + out);
-                    if (out.toString().startsWith("OK:")) anySuccess = true;
-                } catch (Throwable e) {
-                    log("写入异常 " + dir + ": " + e.getMessage());
+        boolean anySuccess = false;
+        for (String dir : dirs) {
+            try {
+                String target = dir + "/.identity_sentinel";
+                Process su = Runtime.getRuntime().exec("su");
+                java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
+                // 用heredoc直接写入内容，不经过App私有目录
+                os.writeBytes("mkdir -p '" + dir + "'\n");
+                os.writeBytes("cat > '" + target + "' << 'DRS_IDENTITY_EOF'\n");
+                os.writeBytes(json + "\n");
+                os.writeBytes("DRS_IDENTITY_EOF\n");
+                os.writeBytes("chmod 666 '" + target + "'\n");
+                os.writeBytes("if [ -f '" + target + "' ]; then echo 'OK:'$(wc -c < '" + target + "'); else echo 'FAIL'; fi\n");
+                os.writeBytes("exit\n");
+                os.flush();
+                java.io.BufferedReader reader = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(su.getInputStream()));
+                StringBuilder out = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) out.append(line);
+                reader.close();
+                su.waitFor();
+                log("写入结果 " + target + ": " + out);
+                if (out.toString().startsWith("OK:")) {
+                    anySuccess = true;
+                    log("写入成功 " + target + " (" + json.length() + " bytes)");
                 }
+            } catch (Throwable e) {
+                log("写入异常 " + dir + ": " + e.getMessage());
             }
-            if (tmpPath != null) new File(tmpPath).delete();
-            if (anySuccess) {
-                // 验证读取
-                String verify = readIdentityFile(packageName);
-                return verify != null;
+        }
+        if (anySuccess) {
+            // 验证：重新读取确认
+            try { Thread.sleep(300); } catch (Throwable ignored) {}
+            String verify = readIdentityFile(packageName);
+            if (verify != null) {
+                log("写入验证成功，读取到 " + verify.length() + " bytes");
+                return true;
+            } else {
+                log("写入验证失败：重新读取为空");
             }
-        } catch (Throwable e) {
-            log("写入身份异常: " + e.getMessage());
         }
         return false;
     }
