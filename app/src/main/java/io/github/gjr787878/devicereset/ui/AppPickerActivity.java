@@ -446,6 +446,21 @@ public class AppPickerActivity extends AppCompatActivity {
                     }
                     full.append("UI状态: hasIdentity=").append(item.hasIdentity)
                             .append(", identityJson长度=").append(item.identityJson == null ? 0 : item.identityJson.length()).append("\n");
+                    // 显式检查外部存储备份（黑洞加速器实际生效值）
+                    String extPath = "/sdcard/Android/data/" + item.packageName + "/files/.identity_sentinel";
+                    try {
+                        Process ep = Runtime.getRuntime().exec(new String[]{"su", "-c",
+                                "ls -la '" + extPath + "' 2>&1; echo '---内容---'; cat '" + extPath + "' 2>&1"});
+                        java.io.BufferedReader er = new java.io.BufferedReader(
+                                new java.io.InputStreamReader(ep.getInputStream()));
+                        full.append("外部备份[").append(extPath).append("]:\n");
+                        String el;
+                        while ((el = er.readLine()) != null) full.append(el).append("\n");
+                        er.close();
+                        ep.waitFor();
+                    } catch (Throwable e) {
+                        full.append("外部备份读取异常: ").append(e.getMessage()).append("\n");
+                    }
                 }
                 full.append("\n");
 
@@ -912,6 +927,9 @@ public class AppPickerActivity extends AppCompatActivity {
             paths.add("/data/user_de/" + uid + "/" + packageName + "/files/.identity_sentinel");
         }
         paths.add("/data/data/" + packageName + "/files/.identity_sentinel");
+        // 外部存储备份路径（模块在目标APP进程内写入，UI通过root读取）
+        paths.add("/sdcard/Android/data/" + packageName + "/files/.identity_sentinel");
+        paths.add("/storage/emulated/0/Android/data/" + packageName + "/files/.identity_sentinel");
 
         for (String path : paths) {
             try {
@@ -1117,6 +1135,9 @@ public class AppPickerActivity extends AppCompatActivity {
         for (String d : dataDirs) {
             filesDirs.add(d + "/files");
         }
+        // 外部存储备份路径（UI手动生成时也写一份，模块和UI都能读到）
+        filesDirs.add("/sdcard/Android/data/" + packageName + "/files");
+        filesDirs.add("/storage/emulated/0/Android/data/" + packageName + "/files");
         return filesDirs;
     }
 

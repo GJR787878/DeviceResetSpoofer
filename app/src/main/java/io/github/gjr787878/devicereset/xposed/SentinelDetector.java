@@ -24,16 +24,28 @@ public class SentinelDetector {
     private static boolean checked = false;
 
     public static Identity checkAndGetIdentity(Context context) {
-        return checkAndGetIdentityByDir(context.getFilesDir().getAbsolutePath());
+        String internalDir = context.getFilesDir().getAbsolutePath();
+        // 外部存储备份路径：/sdcard/Android/data/<目标包名>/files/
+        // 目标APP进程有权限写自己的外部目录，UI端可通过root读取
+        String externalDir = null;
+        try {
+            File ext = context.getExternalFilesDir(null);
+            if (ext != null) externalDir = ext.getAbsolutePath();
+        } catch (Throwable ignored) {}
+        return checkAndGetIdentityByDirs(internalDir, externalDir);
     }
 
     public static Identity checkAndGetIdentityByDir(String filesDirPath) {
+        return checkAndGetIdentityByDirs(filesDirPath, null);
+    }
+
+    public static Identity checkAndGetIdentityByDirs(String internalDirPath, String externalDirPath) {
         if (checked && cachedIdentity != null) {
             return cachedIdentity;
         }
-        XposedBridge.log("[DeviceReset] SentinelDetector check path=" + filesDirPath);
+        XposedBridge.log("[DeviceReset] SentinelDetector internal=" + internalDirPath + " external=" + externalDirPath);
         try {
-            File filesDir = new File(filesDirPath);
+            File filesDir = new File(internalDirPath);
             File sentinel = new File(filesDir, SENTINEL_FILE);
             XposedBridge.log("[DeviceReset] sentinel path=" + sentinel.getAbsolutePath() + " exists=" + sentinel.exists());
 
@@ -49,6 +61,10 @@ public class SentinelDetector {
                         cachedIdentity = id;
                         checked = true;
                         XposedBridge.log("[DeviceReset] 读取到已有身份 androidId=" + id.androidId);
+                        // 同步备份到外部存储
+                        if (externalDirPath != null) {
+                            writeBackup(externalDirPath, json);
+                        }
                         return id;
                     }
                     XposedBridge.log("[DeviceReset] 哨兵文件存在但解析失败，重新生成");
@@ -59,30 +75,20 @@ public class SentinelDetector {
 
             // 哨兵不存在或读取失败 → 生成全新身份
             Identity newIdentity = IdentityGenerator.generateRandom();
+            String jsonStr = newIdentity.toJson();
             if (!filesDir.exists()) {
                 boolean mk = filesDir.mkdirs();
                 XposedBridge.log("[DeviceReset] mkdirs " + filesDir.getAbsolutePath() + " result=" + mk);
             }
 
-            // 用FileOutputStream写入（比Files.write更兼容）
-            try {
-                FileOutputStream fos = new FileOutputStream(sentinel);
-                fos.write(newIdentity.toJson().getBytes(StandardCharsets.UTF_8));
-                fos.flush();
-                fos.close();
-                XposedBridge.log("[DeviceReset] 写入哨兵成功 " + sentinel.getAbsolutePath() + " length=" + sentinel.length());
-            } catch (Throwable writeErr) {
-                XposedBridge.log("[DeviceReset] FileOutputStream写入失败: " + writeErr.getMessage());
-                // 兜底：用Runtime.exec写入
-                try {
-                    String json = newIdentity.toJson();
-                    Process p = Runtime.getRuntime().exec(new String[]{"sh", "-c",
-                            "echo '" + json.replace("'", "'\\''") + "' > '" + sentinel.getAbsolutePath() + "'"});
-                    p.waitFor();
-                    XposedBridge.log("[DeviceReset] sh写入结果 exit=" + p.exitValue() + " exists=" + sentinel.exists());
-                } catch (Throwable execErr) {
-                    XposedBridge.log("[DeviceReset] sh写入也失败: " + execErr.getMessage());
-                }
+            // 用FileOutputStream写入内部目录（比Files.write更兼容）
+            boolean internalOk = writeFile(sentinel, jsonStr);
+            XposedBridge.log("[DeviceReset] 内部目录写入 " + (internalOk ? "成功" : "失败") + " " + sentinel.getAbsolutePath());
+
+            // 同时写入外部存储备份（UI端可读）
+            if (externalDirPath != null) {
+                boolean extOk = writeBackup(externalDirPath, jsonStr);
+                XposedBridge.log("[DeviceReset] 外部备份写入 " + (extOk ? "成功" : "失败") + " " + externalDirPath);
             }
 
             // 尝试设置全局可读
@@ -101,6 +107,44 @@ public class SentinelDetector {
             }
             checked = true;
             return cachedIdentity;
+        }
+    }
+
+    /** 用FileOutputStream写入文件，返回是否成功 */
+    private static boolean writeFile(File target, String content) {
+        try {
+            FileOutputStream fos = new FileOutputStream(target);
+            fos.write(content.getBytes(StandardCharsets.UTF_8));
+            fos.flush();
+            fos.close();
+            return target.exists() && target.length() > 0;
+        } catch (Throwable e) {
+            XposedBridge.log("[DeviceReset] FileOutputStream写入失败 " + target.getAbsolutePath() + ": " + e.getMessage());
+            // 兜底：用sh -c写入
+            try {
+                Process p = Runtime.getRuntime().exec(new String[]{"sh", "-c",
+                        "cat > '" + target.getAbsolutePath() + "' << 'DRS_EOF'\n" + content + "\nDRS_EOF\n"});
+                p.waitFor();
+                boolean ok = target.exists() && target.length() > 0;
+                XposedBridge.log("[DeviceReset] sh兜底写入 " + (ok ? "成功" : "失败") + " exit=" + p.exitValue());
+                return ok;
+            } catch (Throwable e2) {
+                XposedBridge.log("[DeviceReset] sh写入也失败: " + e2.getMessage());
+                return false;
+            }
+        }
+    }
+
+    /** 写入外部存储备份 */
+    private static boolean writeBackup(String externalDirPath, String json) {
+        try {
+            File extDir = new File(externalDirPath);
+            if (!extDir.exists()) extDir.mkdirs();
+            File backup = new File(extDir, SENTINEL_FILE);
+            return writeFile(backup, json);
+        } catch (Throwable e) {
+            XposedBridge.log("[DeviceReset] 外部备份异常: " + e.getMessage());
+            return false;
         }
     }
 
