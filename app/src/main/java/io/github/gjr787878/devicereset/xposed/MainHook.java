@@ -68,8 +68,16 @@ public class MainHook implements IXposedHookLoadPackage {
             }
             XposedBridge.log("[DeviceReset] dataDir resolved: " + filesDir);
 
-            // 核心：检测哨兵文件，决定本次身份
-            Identity identity = SentinelDetector.checkAndGetIdentityByDir(filesDir);
+            // 外部存储目录：/sdcard/Android/data/<包名>/files（应用自身UID可写，UI可root读）
+            String externalFilesDir = null;
+            try {
+                externalFilesDir = new java.io.File(android.os.Environment.getExternalStorageDirectory(),
+                        "Android/data/" + lpparam.packageName + "/files").getAbsolutePath();
+            } catch (Throwable ignored) {}
+            XposedBridge.log("[DeviceReset] externalFilesDir: " + externalFilesDir);
+
+            // 核心：检测哨兵文件，决定本次身份（传入内部+外部两个目录，确保都能写入）
+            Identity identity = SentinelDetector.checkAndGetIdentityByDirs(filesDir, externalFilesDir);
             XposedBridge.log("[DeviceReset] Identity loaded: androidId=" + identity.androidId
                     + ", model=" + identity.model
                     + ", brand=" + identity.brand);

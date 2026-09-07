@@ -551,11 +551,11 @@ public class AppPickerActivity extends AppCompatActivity {
                 }
                 full.append("\n");
 
-                // 3. Xposed模块日志（看模块端写入是否成功）
+                // 3. Xposed模块日志（看模块端自动生成与写入是否成功）
                 full.append("========== Xposed模块日志 ==========\n");
                 try {
                     Process logcat = Runtime.getRuntime().exec(new String[]{"su", "-c",
-                            "logcat -d -t 200 2>/dev/null | grep -iE 'DeviceReset|devicereset|Sentinel|sentinel|identity|Identity' | tail -50"});
+                            "logcat -d -t 500 2>/dev/null | grep -iE 'DeviceReset|AUTO-GENERATE|SentinelDetector|writeFile|identity|Identity' | tail -80"});
                     java.io.BufferedReader lr = new java.io.BufferedReader(
                             new java.io.InputStreamReader(logcat.getInputStream()));
                     String ll;
@@ -569,7 +569,8 @@ public class AppPickerActivity extends AppCompatActivity {
                 try {
                     Process lsp = Runtime.getRuntime().exec(new String[]{"su", "-c",
                             "echo '---所有日志文件---'; ls -t /data/adb/lspd/log/*.log 2>/dev/null; "
-                          + "echo '---Identity loaded记录---'; grep -h 'Identity loaded' /data/adb/lspd/log/*.log 2>/dev/null | tail -40"});
+                          + "echo '---模块全部记录(自动生成/写入/读取)---'; "
+                          + "grep -hE 'DeviceReset|AUTO-GENERATE|SentinelDetector|writeFile|Identity loaded|写入|mkdirs' /data/adb/lspd/log/*.log 2>/dev/null | tail -120"});
                     java.io.BufferedReader lr2 = new java.io.BufferedReader(
                             new java.io.InputStreamReader(lsp.getInputStream()));
                     String ll2;
