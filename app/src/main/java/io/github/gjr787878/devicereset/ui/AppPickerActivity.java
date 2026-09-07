@@ -323,6 +323,20 @@ public class AppPickerActivity extends AppCompatActivity {
         }).start();
     }
 
+    /** 更新顶部计数文字 */
+    private void updateCount() {
+        int total = appList.size();
+        int withVal = 0;
+        for (AppItem it : appList) if (it.hasIdentity) withVal++;
+        if (LANG_ZH.equals(currentLang)) {
+            tvCount.setText(total + " 个应用 · " + withVal + " 个有伪装值");
+        } else if (LANG_EN.equals(currentLang)) {
+            tvCount.setText(total + " apps · " + withVal + " with identity");
+        } else {
+            tvCount.setText(total + " приложений · " + withVal + " с подменой");
+        }
+    }
+
     /** 将诊断日志写入 /sdcard/Download/devicereset_diag.txt */
     private void writeDiagToDownload() {
         new Thread(() -> {
@@ -752,38 +766,27 @@ public class AppPickerActivity extends AppCompatActivity {
     private String readIdentityFile(String packageName) {
         String tmpPath = "/data/local/tmp/drs_read_" + System.currentTimeMillis();
         try {
-            // 一个shell脚本完成：遍历所有用户 → 检查目录 → 检查文件 → 复制 → 输出诊断
+            // 直接遍历已知用户ID，不依赖通配符展开
+            int[] userIds = {0, 10, 11, 12, 13, 14, 15};
             StringBuilder script = new StringBuilder();
-            script.append("echo '=== 用户列表 ==='\n");
-            script.append("ls -1 /data/user/ 2>/dev/null\n");
-            script.append("echo '=== 搜索哨兵文件 ==='\n");
             script.append("FOUND=''\n");
-            script.append("for u in /data/user/*/; do\n");
-            script.append("  f=\"${u}").append(packageName).append("/files/.identity_sentinel\"\n");
-            script.append("  if [ -f \"$f\" ]; then\n");
-            script.append("    echo \"FOUND: $f ($(stat -c%s \"$f\" 2>/dev/null || echo unknown) bytes)\"\n");
-            script.append("    head -c 200 \"$f\"\n");
-            script.append("    echo ''\n");
-            script.append("    dd if=\"$f\" of='").append(tmpPath).append("' bs=65536 2>/dev/null\n");
-            script.append("    chmod 666 '").append(tmpPath).append("' 2>/dev/null\n");
-            script.append("    FOUND=\"$f\"\n");
-            script.append("  else\n");
-            script.append("    echo \"MISSING: $f\"\n");
-            script.append("    if [ -d \"${u}").append(packageName).append("\" ]; then\n");
-            script.append("      echo \"  数据目录存在，files内容: $(ls -la \"${u}").append(packageName).append("/files/\" 2>&1 | tr '\\n' ' ')\"\n");
-            script.append("    else\n");
-            script.append("      echo \"  数据目录不存在\"\n");
-            script.append("    fi\n");
-            script.append("  fi\n");
-            script.append("done\n");
+            for (int uid : userIds) {
+                String f = "/data/user/" + uid + "/" + packageName + "/files/.identity_sentinel";
+                script.append("if [ -f '").append(f).append("' ]; then\n");
+                script.append("  echo 'FOUND: ").append(f).append("'\n");
+                script.append("  dd if='").append(f).append("' of='").append(tmpPath).append("' bs=65536 2>/dev/null\n");
+                script.append("  chmod 666 '").append(tmpPath).append("' 2>/dev/null\n");
+                script.append("  FOUND='").append(f).append("'\n");
+                script.append("fi\n");
+            }
             // 也检查 /data/data/
-            script.append("f2='/data/data/").append(packageName).append("/files/.identity_sentinel'\n");
-            script.append("if [ -f \"$f2\" ] && [ -z \"$FOUND\" ]; then\n");
-            script.append("  echo \"FOUND: $f2\"\n");
-            script.append("  dd if=\"$f2\" of='").append(tmpPath).append("' bs=65536 2>/dev/null\n");
+            String f2 = "/data/data/" + packageName + "/files/.identity_sentinel";
+            script.append("if [ -f '").append(f2).append("' ] && [ -z \"$FOUND\" ]; then\n");
+            script.append("  echo 'FOUND: ").append(f2).append("'\n");
+            script.append("  dd if='").append(f2).append("' of='").append(tmpPath).append("' bs=65536 2>/dev/null\n");
             script.append("  chmod 666 '").append(tmpPath).append("' 2>/dev/null\n");
             script.append("fi\n");
-            script.append("echo '=== 完成 ==='\n");
+            script.append("echo 'DONE'\n");
             script.append("exit\n");
 
             Process su = Runtime.getRuntime().exec("su");
@@ -799,7 +802,7 @@ public class AppPickerActivity extends AppCompatActivity {
             }
             reader.close();
             su.waitFor();
-            log("读取诊断 " + packageName + ":\n" + diag);
+            log("读取诊断 " + packageName + ": " + diag.toString().replace("\n", " | "));
 
             File tmpFile = new File(tmpPath);
             if (tmpFile.exists() && tmpFile.length() > 0) {
@@ -834,6 +837,7 @@ public class AppPickerActivity extends AppCompatActivity {
                     item.hasIdentity = true;
                     runOnUiThread(() -> {
                         adapter.notifyDataSetChanged();
+                        updateCount();
                         showIdentityDialog(item);
                     });
                 } else {
@@ -909,19 +913,19 @@ public class AppPickerActivity extends AppCompatActivity {
         return false;
     }
 
-    /** 用 for 循环遍历所有用户目录，定位目标应用的数据目录，返回 files 目录路径（自动创建） */
+    /** 直接遍历已知用户ID，定位目标应用的数据目录，返回 files 目录路径 */
     private List<String> findAppFilesDirs(String packageName) {
         List<String> dataDirs = new ArrayList<>();
         try {
             Process su = Runtime.getRuntime().exec("su");
             java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
-            // 用for循环遍历（find会被SELinux阻止进入其他用户目录）
-            os.writeBytes("for u in /data/user/*/; do\n");
-            os.writeBytes("  d=\"$u" + packageName + "\"\n");
-            os.writeBytes("  if [ -d \"$d\" ]; then echo \"$d\"; fi\n");
-            os.writeBytes("done\n");
-            os.writeBytes("d='/data/data/" + packageName + "'\n");
-            os.writeBytes("if [ -d \"$d\" ]; then echo \"$d\"; fi\n");
+            int[] userIds = {0, 10, 11, 12, 13, 14, 15};
+            for (int uid : userIds) {
+                String d = "/data/user/" + uid + "/" + packageName;
+                os.writeBytes("if [ -d '" + d + "' ]; then echo '" + d + "'; fi\n");
+            }
+            String d2 = "/data/data/" + packageName;
+            os.writeBytes("if [ -d '" + d2 + "' ]; then echo '" + d2 + "'; fi\n");
             os.writeBytes("exit\n");
             os.flush();
             java.io.BufferedReader reader = new java.io.BufferedReader(
