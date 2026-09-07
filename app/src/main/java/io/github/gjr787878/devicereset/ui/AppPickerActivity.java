@@ -305,28 +305,24 @@ public class AppPickerActivity extends AppCompatActivity {
                     rvApps.setVisibility(View.GONE);
                 } else {
                     tvEmpty.setVisibility(View.GONE);
+                    tvDebug.setVisibility(View.GONE);
                     rvApps.setVisibility(View.VISIBLE);
-                    // 诊断版本：始终显示日志
-                    tvDebug.setText(debugLog.toString());
-                    tvDebug.setVisibility(View.VISIBLE);
                     int withVal = 0;
                     for (AppItem i : finalItems) if (i.hasIdentity) withVal++;
                     if (LANG_ZH.equals(currentLang)) {
-                        tvCount.setText(finalItems.size() + " 个应用 · " + withVal + " 个有伪装值 (点击重新扫描)");
+                        tvCount.setText(finalItems.size() + " 个应用 · " + withVal + " 个有伪装值");
                     } else if (LANG_EN.equals(currentLang)) {
-                        tvCount.setText(finalItems.size() + " apps · " + withVal + " with identity (tap to rescan)");
+                        tvCount.setText(finalItems.size() + " apps · " + withVal + " with identity");
                     } else {
                         tvCount.setText(finalItems.size() + " приложений · " + withVal + " с подменой");
                     }
+                    // 点击计数文字触发重新扫描
                     tvCount.setOnClickListener(v -> {
                         debugLog.setLength(0);
                         log("手动重新扫描...");
                         new Thread(() -> {
                             rescanIdentitiesFromFiles();
-                            runOnUiThread(() -> {
-                                tvDebug.setText(debugLog.toString());
-                                updateCount();
-                            });
+                            runOnUiThread(this::updateCount);
                         }).start();
                     });
                 }
@@ -362,10 +358,7 @@ public class AppPickerActivity extends AppCompatActivity {
             runOnUiThread(() -> {
                 adapter.notifyDataSetChanged();
                 updateCount();
-                tvDebug.setText(debugLog.toString());
             });
-        } else {
-            runOnUiThread(() -> tvDebug.setText(debugLog.toString()));
         }
         writeDiagToDownload();
     }
@@ -384,19 +377,19 @@ public class AppPickerActivity extends AppCompatActivity {
         }
     }
 
-    /** 将诊断日志写入 /sdcard/Download/devicereset_diag.txt */
+    /** 将诊断日志写入 /sdcard/Download/111 */
     private void writeDiagToDownload() {
         new Thread(() -> {
             try {
                 String logContent = debugLog.toString();
-                File tmpFile = new File(getCacheDir(), "devicereset_diag.txt");
-                java.nio.file.Files.write(tmpFile.toPath(), logContent.getBytes(StandardCharsets.UTF_8));
                 Process su = Runtime.getRuntime().exec("su");
                 java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
                 os.writeBytes("mkdir -p /sdcard/Download\n");
-                os.writeBytes("cp '" + tmpFile.getAbsolutePath() + "' /sdcard/Download/devicereset_diag.txt\n");
-                os.writeBytes("chmod 666 /sdcard/Download/devicereset_diag.txt\n");
-                os.writeBytes("ls -l /sdcard/Download/devicereset_diag.txt\n");
+                os.writeBytes("cat > /sdcard/Download/111 << 'DRS_DIAG_EOF'\n");
+                os.writeBytes(logContent + "\n");
+                os.writeBytes("DRS_DIAG_EOF\n");
+                os.writeBytes("chmod 666 /sdcard/Download/111\n");
+                os.writeBytes("ls -l /sdcard/Download/111\n");
                 os.writeBytes("exit\n");
                 os.flush();
                 java.io.BufferedReader reader = new java.io.BufferedReader(
@@ -406,8 +399,7 @@ public class AppPickerActivity extends AppCompatActivity {
                 while ((line = reader.readLine()) != null) out.append(line);
                 reader.close();
                 su.waitFor();
-                log("诊断日志已写入Download: " + out);
-                tmpFile.delete();
+                log("诊断日志已写入 /sdcard/Download/111: " + out);
             } catch (Throwable e) {
                 log("写入诊断日志失败: " + e.getMessage());
             }
