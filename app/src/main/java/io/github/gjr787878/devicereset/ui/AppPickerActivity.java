@@ -812,14 +812,15 @@ public class AppPickerActivity extends AppCompatActivity {
         return false;
     }
 
-    /** 用 root find 定位目标应用在所有用户下的 files 目录 */
+    /** 用 root find 定位目标应用在所有用户下的数据目录，返回 files 目录路径（自动创建） */
     private List<String> findAppFilesDirs(String packageName) {
-        List<String> dirs = new ArrayList<>();
+        List<String> dataDirs = new ArrayList<>();
         try {
             Process su = Runtime.getRuntime().exec("su");
             java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
-            os.writeBytes("find /data/user/ -maxdepth 3 -type d -path '*/" + packageName + "/files' 2>/dev/null\n");
-            os.writeBytes("find /data/data/ -maxdepth 2 -type d -path '*/" + packageName + "/files' 2>/dev/null\n");
+            // 找应用的数据目录（不是files子目录，因为files可能还没创建）
+            os.writeBytes("find /data/user/ -maxdepth 2 -type d -name '" + packageName + "' 2>/dev/null\n");
+            os.writeBytes("find /data/data/ -maxdepth 1 -type d -name '" + packageName + "' 2>/dev/null\n");
             os.writeBytes("exit\n");
             os.flush();
             java.io.BufferedReader reader = new java.io.BufferedReader(
@@ -827,16 +828,30 @@ public class AppPickerActivity extends AppCompatActivity {
             String line;
             while ((line = reader.readLine()) != null) {
                 line = line.trim();
-                if (!line.isEmpty() && line.endsWith("/files") && !dirs.contains(line)) {
-                    dirs.add(line);
+                if (!line.isEmpty() && !dataDirs.contains(line)) {
+                    dataDirs.add(line);
                 }
             }
             reader.close();
             su.waitFor();
         } catch (Throwable e) {
-            log("find files目录失败 " + packageName + ": " + e.getMessage());
+            log("find数据目录失败 " + packageName + ": " + e.getMessage());
         }
-        return dirs;
+        // 兜底：常见用户ID
+        if (dataDirs.isEmpty()) {
+            for (int uid : new int[]{0, 10, 11, 12, 13}) {
+                String candidate = "/data/user/" + uid + "/" + packageName;
+                if (!dataDirs.contains(candidate)) dataDirs.add(candidate);
+            }
+            dataDirs.add("/data/data/" + packageName);
+        }
+        log("找到数据目录 " + packageName + ": " + dataDirs);
+        // 转为 files 目录路径
+        List<String> filesDirs = new ArrayList<>();
+        for (String d : dataDirs) {
+            filesDirs.add(d + "/files");
+        }
+        return filesDirs;
     }
 
     private void showIdentityDialog(AppItem item) {
