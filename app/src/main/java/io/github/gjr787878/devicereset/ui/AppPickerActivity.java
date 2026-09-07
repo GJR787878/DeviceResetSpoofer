@@ -305,17 +305,30 @@ public class AppPickerActivity extends AppCompatActivity {
                     rvApps.setVisibility(View.GONE);
                 } else {
                     tvEmpty.setVisibility(View.GONE);
-                    tvDebug.setVisibility(View.GONE);
                     rvApps.setVisibility(View.VISIBLE);
+                    // 诊断版本：始终显示日志
+                    tvDebug.setText(debugLog.toString());
+                    tvDebug.setVisibility(View.VISIBLE);
                     int withVal = 0;
                     for (AppItem i : finalItems) if (i.hasIdentity) withVal++;
                     if (LANG_ZH.equals(currentLang)) {
-                        tvCount.setText(finalItems.size() + " 个应用 · " + withVal + " 个有伪装值");
+                        tvCount.setText(finalItems.size() + " 个应用 · " + withVal + " 个有伪装值 (点击重新扫描)");
                     } else if (LANG_EN.equals(currentLang)) {
-                        tvCount.setText(finalItems.size() + " apps · " + withVal + " with identity");
+                        tvCount.setText(finalItems.size() + " apps · " + withVal + " with identity (tap to rescan)");
                     } else {
                         tvCount.setText(finalItems.size() + " приложений · " + withVal + " с подменой");
                     }
+                    tvCount.setOnClickListener(v -> {
+                        debugLog.setLength(0);
+                        log("手动重新扫描...");
+                        new Thread(() -> {
+                            rescanIdentitiesFromFiles();
+                            runOnUiThread(() -> {
+                                tvDebug.setText(debugLog.toString());
+                                updateCount();
+                            });
+                        }).start();
+                    });
                 }
                 // 写入诊断日志到 Download 文件夹
                 writeDiagToDownload();
@@ -349,7 +362,10 @@ public class AppPickerActivity extends AppCompatActivity {
             runOnUiThread(() -> {
                 adapter.notifyDataSetChanged();
                 updateCount();
+                tvDebug.setText(debugLog.toString());
             });
+        } else {
+            runOnUiThread(() -> tvDebug.setText(debugLog.toString()));
         }
         writeDiagToDownload();
     }
