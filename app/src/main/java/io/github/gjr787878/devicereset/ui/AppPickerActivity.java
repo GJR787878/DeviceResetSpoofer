@@ -351,6 +351,7 @@ public class AppPickerActivity extends AppCompatActivity {
                 updateCount();
             });
         }
+        writeDiagToDownload();
     }
 
     /** 更新顶部计数文字 */
@@ -794,7 +795,6 @@ public class AppPickerActivity extends AppCompatActivity {
     }
 
     private String readIdentityFile(String packageName) {
-        // 构建所有可能的路径
         List<String> paths = new ArrayList<>();
         int[] userIds = {0, 10, 11, 12, 13, 14, 15};
         for (int uid : userIds) {
@@ -805,42 +805,30 @@ public class AppPickerActivity extends AppCompatActivity {
 
         for (String path : paths) {
             try {
-                Process su = Runtime.getRuntime().exec("su");
-                java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
-                // 先检查文件是否存在，存在则cat输出
-                os.writeBytes("if [ -f '" + path + "' ]; then\n");
-                os.writeBytes("  echo 'BEGIN_DRS_IDENTITY'\n");
-                os.writeBytes("  cat '" + path + "'\n");
-                os.writeBytes("  echo ''\n");
-                os.writeBytes("  echo 'END_DRS_IDENTITY'\n");
-                os.writeBytes("fi\n");
-                os.writeBytes("exit\n");
-                os.flush();
+                // 用 su -c 单条命令直接cat，同时合并stderr看错误
+                Process p = Runtime.getRuntime().exec(new String[]{"su", "-c",
+                        "cat '" + path + "' 2>&1"});
                 java.io.BufferedReader reader = new java.io.BufferedReader(
-                        new java.io.InputStreamReader(su.getInputStream()));
+                        new java.io.InputStreamReader(p.getInputStream()));
                 StringBuilder sb = new StringBuilder();
-                boolean capturing = false;
                 String line;
                 while ((line = reader.readLine()) != null) {
-                    if (line.equals("BEGIN_DRS_IDENTITY")) {
-                        capturing = true;
-                        continue;
-                    }
-                    if (line.equals("END_DRS_IDENTITY")) break;
-                    if (capturing) sb.append(line).append("\n");
+                    sb.append(line).append("\n");
                 }
                 reader.close();
-                su.waitFor();
+                p.waitFor();
                 String content = sb.toString().trim();
                 if (content.startsWith("{")) {
-                    log("成功读取 " + path + " (" + content.length() + " bytes)");
+                    log("读取成功 " + path + " (" + content.length() + " bytes)");
                     return content;
+                } else {
+                    log("读取失败 " + path + " exit=" + p.exitValue() + " output=" + content.substring(0, Math.min(80, content.length())));
                 }
             } catch (Throwable e) {
-                log("读取失败 " + path + ": " + e.getMessage());
+                log("读取异常 " + path + ": " + e.getMessage());
             }
         }
-        log("所有路径均未读取到伪装值 " + packageName);
+        log("所有路径均未读取到 " + packageName);
         return null;
     }
 
