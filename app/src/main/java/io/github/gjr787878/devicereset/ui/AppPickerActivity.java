@@ -136,8 +136,6 @@ public class AppPickerActivity extends AppCompatActivity {
     private void loadApps() {
         debugLog.setLength(0);
         new Thread(() -> {
-            // 0. Root预热：确保root权限就绪后再读取文件
-            ensureRootReady();
             // 1. 从 LSPosed 配置读取作用域
             Set<String> scopePkgs = readLSPosedScope();
             log("作用域读取结果: " + scopePkgs.size() + " 个 -> " + scopePkgs);
@@ -256,24 +254,23 @@ public class AppPickerActivity extends AppCompatActivity {
                         }
                     }
                 }
-                // 直接读取哨兵文件（不依赖扫描），并与原机真实值对比判断是否真的伪装了
+                // 直接读取哨兵文件（不依赖扫描），只要文件存在且是合法JSON就标记有伪装值
                 String json = readIdentityFile(pkg);
                 if (json == null) {
-                    // 重试一次（root刚就绪时第一次调用可能失败）
-                    try { Thread.sleep(300); } catch (Throwable ignored) {}
+                    // 重试两次（root刚就绪时第一次调用可能失败）
+                    try { Thread.sleep(500); } catch (Throwable ignored) {}
                     json = readIdentityFile(pkg);
                 }
-                if (json != null) {
-                    Identity id = Identity.fromJson(json);
-                    if (id != null && isIdentitySpoofed(id)) {
-                        item.identityJson = json;
-                        item.hasIdentity = true;
-                        log("检测到伪装值 " + pkg + " androidId=" + id.androidId + " brand=" + id.brand);
-                    } else {
-                        log("哨兵文件存在但值与原机相同或解析失败 " + pkg);
-                    }
+                if (json == null) {
+                    try { Thread.sleep(500); } catch (Throwable ignored) {}
+                    json = readIdentityFile(pkg);
+                }
+                if (json != null && json.startsWith("{")) {
+                    item.identityJson = json;
+                    item.hasIdentity = true;
+                    log("检测到伪装值 " + pkg + " (" + json.length() + " bytes)");
                 } else {
-                    log("未读取到哨兵文件 " + pkg);
+                    log("未检测到伪装值 " + pkg + " json=" + (json == null ? "null" : json.substring(0, Math.min(50, json.length()))));
                 }
                 items.add(item);
                 log("已添加: " + pkg + " name=" + item.appName + " iconIsDefault=" + (item.icon == defaultIcon) + " hasIdentity=" + item.hasIdentity);
