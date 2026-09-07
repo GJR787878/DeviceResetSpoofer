@@ -512,6 +512,21 @@ public class AppPickerActivity extends AppCompatActivity {
                     } catch (Throwable e) {
                         full.append("外部备份读取异常: ").append(e.getMessage()).append("\n");
                     }
+                    // 运行时实际值（进程真正在用）+ 进程是否运行
+                    String rtPath = "/sdcard/Android/data/" + item.packageName + "/files/.identity_runtime";
+                    try {
+                        Process rp = Runtime.getRuntime().exec(new String[]{"su", "-c",
+                                "echo '进程:'; pidof '" + item.packageName + "' 2>&1; echo '---运行时值---'; cat '" + rtPath + "' 2>&1"});
+                        java.io.BufferedReader rr = new java.io.BufferedReader(
+                                new java.io.InputStreamReader(rp.getInputStream()));
+                        full.append("运行时实际值[").append(rtPath).append("]:\n");
+                        String rl;
+                        while ((rl = rr.readLine()) != null) full.append(rl).append("\n");
+                        rr.close();
+                        rp.waitFor();
+                    } catch (Throwable e) {
+                        full.append("运行时值读取异常: ").append(e.getMessage()).append("\n");
+                    }
                 }
                 full.append("\n");
 
@@ -1021,6 +1036,62 @@ public class AppPickerActivity extends AppCompatActivity {
         return null;
     }
 
+    /** root读取指定单个文件内容，成功返回内容，失败返回null */
+    private String catViaRoot(String path) {
+        try {
+            Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", "cat '" + path + "' 2>&1"});
+            java.io.BufferedReader r = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(p.getInputStream()));
+            StringBuilder sb = new StringBuilder();
+            String l;
+            while ((l = r.readLine()) != null) sb.append(l).append("\n");
+            r.close();
+            p.waitFor();
+            String c = sb.toString().trim();
+            return c.startsWith("{") ? c : null;
+        } catch (Throwable e) {
+            return null;
+        }
+    }
+
+    /** 读取目标进程当前真正在用的运行时值（模块每次加载时写.identity_runtime，UI不写） */
+    private String readRuntimeFile(String packageName) {
+        String[] paths = {
+                "/sdcard/Android/data/" + packageName + "/files/.identity_runtime",
+                "/storage/emulated/0/Android/data/" + packageName + "/files/.identity_runtime"
+        };
+        for (String path : paths) {
+            String c = catViaRoot(path);
+            if (c != null) {
+                log("读取运行时值成功 " + path + " (" + c.length() + " bytes)");
+                return c;
+            }
+        }
+        log("未读取到运行时值 " + packageName);
+        return null;
+    }
+
+    /** 判断目标应用进程当前是否正在运行（返回进程名列表字符串） */
+    private String getRunningProcessInfo(String packageName) {
+        try {
+            Process p = Runtime.getRuntime().exec(new String[]{"su", "-c",
+                    "pidof '" + packageName + "' 2>/dev/null; ps -A 2>/dev/null | grep '" + packageName + "' | awk '{print $NF}' | sort -u"});
+            java.io.BufferedReader r = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(p.getInputStream()));
+            StringBuilder sb = new StringBuilder();
+            String l;
+            while ((l = r.readLine()) != null) {
+                l = l.trim();
+                if (!l.isEmpty()) sb.append(l).append(" ");
+            }
+            r.close();
+            p.waitFor();
+            return sb.toString().trim();
+        } catch (Throwable e) {
+            return "";
+        }
+    }
+
     /** 生成随机身份并写入目标应用的哨兵文件 */
     private void generateAndWriteIdentity(AppItem item) {
         new Thread(() -> {
@@ -1235,13 +1306,19 @@ public class AppPickerActivity extends AppCompatActivity {
                     .show();
             return;
         }
-        Identity id = Identity.fromJson(item.identityJson);
-        if (id == null) {
+        Identity savedId = Identity.fromJson(item.identityJson);
+        if (savedId == null) {
             String title = zh ? "解析失败" : en ? "Parse Error" : "Ошибка парсинга";
             String ok = zh ? "确定" : en ? "OK" : "ОК";
             new AlertDialog.Builder(this).setTitle(title).setPositiveButton(ok, null).show();
             return;
         }
+        // 读取目标进程当前真正在用的运行时值（模块每次加载写.identity_runtime），只显示这一套
+        String runtimeJson = readRuntimeFile(item.packageName);
+        Identity runtimeId = Identity.fromJson(runtimeJson);
+        // 主显示：优先运行时实际值，没有则回退已保存值
+        Identity id = runtimeId != null ? runtimeId : savedId;
+
         String lApp = zh ? "应用" : en ? "App" : "Приложение";
         String lPkg = zh ? "包名" : en ? "Package" : "Пакет";
         String lAdId = zh ? "广告ID" : en ? "Ad ID" : "Рекл. ID";
@@ -1252,7 +1329,7 @@ public class AppPickerActivity extends AppCompatActivity {
         String lFp = zh ? "指纹" : en ? "Fingerprint" : "Отпечаток";
         String lCarrier = zh ? "运营商" : en ? "Carrier" : "Оператор";
         String lCarrierCode = zh ? "运营商代码" : en ? "Carrier Code" : "Код оператора";
-        String lTitle = zh ? "当前伪装值（伪装 → 原始）" : en ? "Current Identity (spoofed → original)" : "Текущая подмена (подмена → оригинал)";
+        String lTitle = zh ? "应用实际使用值（实际 → 原始）" : en ? "Actual value in use (actual → original)" : "Фактическое значение (факт → оригинал)";
         String ok = zh ? "确定" : en ? "OK" : "ОК";
         String lOriginal = zh ? "原始" : en ? "orig" : "ориг";
 

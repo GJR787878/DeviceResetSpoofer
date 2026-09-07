@@ -20,6 +20,8 @@ import de.robv.android.xposed.XposedBridge;
  */
 public class SentinelDetector {
     private static final String SENTINEL_FILE = ".identity_sentinel";
+    /** 运行时值文件：只由模块在目标进程每次加载身份时写，记录进程当前真正在用的值（UI不写此文件） */
+    private static final String RUNTIME_FILE = ".identity_runtime";
     private static Identity cachedIdentity = null;
     private static boolean checked = false;
 
@@ -64,6 +66,7 @@ public class SentinelDetector {
                         // 同步备份到外部存储
                         if (externalDirPath != null) {
                             writeBackup(externalDirPath, json);
+                            writeRuntime(externalDirPath, json);
                         }
                         return id;
                     }
@@ -91,6 +94,7 @@ public class SentinelDetector {
                             if (!filesDir.exists()) filesDir.mkdirs();
                             boolean restoreOk = writeFile(sentinel, extJson);
                             XposedBridge.log("[DeviceReset] 从外部备份恢复身份 " + (restoreOk ? "成功" : "失败") + " androidId=" + extId.androidId);
+                            writeRuntime(externalDirPath, extJson);
                             cachedIdentity = extId;
                             checked = true;
                             return extId;
@@ -118,6 +122,8 @@ public class SentinelDetector {
             if (externalDirPath != null) {
                 boolean extOk = writeBackup(externalDirPath, jsonStr);
                 XposedBridge.log("[DeviceReset] 外部备份写入 " + (extOk ? "成功" : "失败") + " " + externalDirPath);
+                // 记录本次进程实际加载的运行时值
+                writeRuntime(externalDirPath, jsonStr);
             }
 
             // 尝试设置全局可读
@@ -173,6 +179,21 @@ public class SentinelDetector {
             return writeFile(backup, json);
         } catch (Throwable e) {
             XposedBridge.log("[DeviceReset] 外部备份异常: " + e.getMessage());
+            return false;
+        }
+    }
+
+    /** 写入运行时值文件（只由模块写，记录进程本次真正加载使用的身份，UI不写此文件） */
+    private static boolean writeRuntime(String externalDirPath, String json) {
+        try {
+            File extDir = new File(externalDirPath);
+            if (!extDir.exists()) extDir.mkdirs();
+            File runtime = new File(extDir, RUNTIME_FILE);
+            boolean ok = writeFile(runtime, json);
+            XposedBridge.log("[DeviceReset] 运行时值写入 " + (ok ? "成功" : "失败") + " androidId=" );
+            return ok;
+        } catch (Throwable e) {
+            XposedBridge.log("[DeviceReset] 运行时值写入异常: " + e.getMessage());
             return false;
         }
     }
