@@ -111,7 +111,6 @@ public class SentinelDetector {
             String jsonStr = newIdentity.toJson();
             XposedBridge.log("[DeviceReset] ===AUTO-GENERATE START=== androidId=" + newIdentity.androidId
                     + " model=" + newIdentity.model + " brand=" + newIdentity.brand);
-            XposedBridge.log("[DeviceReset] AUTO-GENERATE fullJson=" + jsonStr);
 
             if (!filesDir.exists()) {
                 boolean mk = filesDir.mkdirs();

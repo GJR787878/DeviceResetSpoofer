@@ -322,13 +322,11 @@ public class AppPickerActivity extends AppCompatActivity {
                         }).start();
                     });
                 }
-                // 写入诊断日志到 Download 文件夹
-                writeDiagToDownload();
             });
             // 进入后连续多轮自动重扫，模块一生成新身份就自动标蓝，无需手动生成
             startAutoRescanSeries();
           } catch (Throwable fatal) {
-            // 兜底：任何异常都不能让界面永久停在"正在扫描"，并务必写出诊断日志
+            // 兜底：任何异常都不能让界面永久停在"正在扫描"
             log("加载致命异常: " + fatal);
             final String emsg = String.valueOf(fatal);
             runOnUiThread(() -> {
@@ -339,7 +337,6 @@ public class AppPickerActivity extends AppCompatActivity {
                 tvDebug.setVisibility(View.VISIBLE);
                 rvApps.setVisibility(View.GONE);
             });
-            writeDiagToDownload();
           }
         }).start();
     }
@@ -379,7 +376,6 @@ public class AppPickerActivity extends AppCompatActivity {
                 updateCount();
             });
         }
-        writeDiagToDownload();
     }
 
     /** 判断伪装JSON是否确实与本机真实值不同（关键字段任一不同即视为已伪装） */
@@ -446,170 +442,6 @@ public class AppPickerActivity extends AppCompatActivity {
         } else {
             tvCount.setText(total + " приложений · " + withVal + " с подменой");
         }
-    }
-
-    /** 将诊断日志（含本机真实值+伪装值对比）写入 /sdcard/Download/111 */
-    private void writeDiagToDownload() {
-        new Thread(() -> {
-            try {
-                StringBuilder full = new StringBuilder();
-                full.append("========== DeviceResetSpoofer 诊断日志 ==========\n");
-                full.append("时间: ").append(new java.util.Date().toString()).append("\n\n");
-
-                // 1. 本机真实值
-                full.append("========== 本机真实值 ==========\n");
-                try {
-                    String androidId = android.provider.Settings.Secure.getString(
-                            getContentResolver(), android.provider.Settings.Secure.ANDROID_ID);
-                    full.append("Android ID: ").append(androidId).append("\n");
-                } catch (Throwable e) {
-                    full.append("Android ID: 读取失败 ").append(e.getMessage()).append("\n");
-                }
-                full.append("品牌(BRAND): ").append(android.os.Build.BRAND).append("\n");
-                full.append("型号(MODEL): ").append(android.os.Build.MODEL).append("\n");
-                full.append("厂商(MANUFACTURER): ").append(android.os.Build.MANUFACTURER).append("\n");
-                full.append("设备(DEVICE): ").append(android.os.Build.DEVICE).append("\n");
-                full.append("产品(PRODUCT): ").append(android.os.Build.PRODUCT).append("\n");
-                full.append("硬件(HARDWARE): ").append(android.os.Build.HARDWARE).append("\n");
-                full.append("指纹(FINGERPRINT): ").append(android.os.Build.FINGERPRINT).append("\n");
-                full.append("Build ID: ").append(android.os.Build.ID).append("\n");
-                full.append("Bootloader: ").append(android.os.Build.BOOTLOADER).append("\n");
-                full.append("RadioVersion: ").append(android.os.Build.getRadioVersion()).append("\n");
-                full.append("Build Time: ").append(new java.util.Date(android.os.Build.TIME).toString()).append("\n");
-                full.append("\n");
-
-                // 2. 每个应用的伪装值
-                full.append("========== 作用域应用伪装值 ==========\n");
-                for (AppItem item : appList) {
-                    full.append("\n--- ").append(item.appName).append(" (").append(item.packageName).append(") ---\n");
-                    // 重新读取哨兵文件
-                    String json = readIdentityFile(item.packageName);
-                    if (json != null && json.startsWith("{")) {
-                        full.append("哨兵文件: 存在 (").append(json.length()).append(" bytes)\n");
-                        full.append("伪装值JSON:\n").append(json).append("\n");
-                        // 解析并对比
-                        try {
-                            org.json.JSONObject obj = new org.json.JSONObject(json);
-                            full.append("\n--- 关键字段对比 ---\n");
-                            full.append("Android ID: 伪装=").append(obj.optString("androidId", "?"))
-                                    .append(" | 真实=").append(android.provider.Settings.Secure.getString(
-                                            getContentResolver(), android.provider.Settings.Secure.ANDROID_ID)).append("\n");
-                            full.append("品牌: 伪装=").append(obj.optString("brand", "?"))
-                                    .append(" | 真实=").append(android.os.Build.BRAND).append("\n");
-                            full.append("型号: 伪装=").append(obj.optString("model", "?"))
-                                    .append(" | 真实=").append(android.os.Build.MODEL).append("\n");
-                            full.append("厂商: 伪装=").append(obj.optString("manufacturer", "?"))
-                                    .append(" | 真实=").append(android.os.Build.MANUFACTURER).append("\n");
-                            full.append("指纹: 伪装=").append(obj.optString("fingerprint", "?"))
-                                    .append("\n  真实=").append(android.os.Build.FINGERPRINT).append("\n");
-                            full.append("IMEI: 伪装=").append(obj.optString("imei", "?")).append("\n");
-                            full.append("序列号: 伪装=").append(obj.optString("serial", "?")).append("\n");
-                            full.append("MAC: 伪装=").append(obj.optString("macAddress", "?")).append("\n");
-                        } catch (Throwable e) {
-                            full.append("JSON解析失败: ").append(e.getMessage()).append("\n");
-                        }
-                    } else {
-                        full.append("哨兵文件: 不存在（该应用未生成伪装值，或数据已被清除）\n");
-                    }
-                    full.append("UI状态: hasIdentity=").append(item.hasIdentity)
-                            .append(", identityJson长度=").append(item.identityJson == null ? 0 : item.identityJson.length()).append("\n");
-                    // UI自身SharedPreferences缓存（也是一个存储位置）
-                    try {
-                        String cached = getSharedPreferences("devicereset_ui", MODE_PRIVATE)
-                                .getString("identity_" + item.packageName, null);
-                        full.append("UI缓存[SharedPreferences identity_").append(item.packageName).append("]: ")
-                                .append(cached == null ? "无" : "(" + cached.length() + " bytes) " + cached).append("\n");
-                    } catch (Throwable ignored) {}
-                    // 枚举所有可能存储伪装值的位置：内部多用户 / user_de / data/data / 外部多卷，逐个 ls+cat
-                    full.append("------ 所有可能的身份存储位置（逐项列出）------\n");
-                    full.append(dumpAllIdentityLocations(item.packageName));
-                    // 进程是否在运行
-                    try {
-                        Process pp = Runtime.getRuntime().exec(new String[]{"su", "-c",
-                                "echo '进程PID:'; pidof '" + item.packageName + "' 2>&1"});
-                        java.io.BufferedReader pr = new java.io.BufferedReader(
-                                new java.io.InputStreamReader(pp.getInputStream()));
-                        String pl;
-                        while ((pl = pr.readLine()) != null) full.append(pl).append("\n");
-                        pr.close();
-                        pp.waitFor();
-                    } catch (Throwable ignored) {}
-                    // logcat兜底：模块最后一次加载记录（免重启也能看到进程实际值）
-                    try {
-                        Identity logcatId = readRuntimeFromLogcat(item.packageName);
-                        full.append("logcat进程实际值: ");
-                        if (logcatId != null) {
-                            full.append("androidId=").append(logcatId.androidId)
-                                .append(" brand=").append(logcatId.brand)
-                                .append(" model=").append(logcatId.model).append("\n");
-                        } else {
-                            full.append("无（该应用最近未启动过，或日志已被冲掉）\n");
-                        }
-                    } catch (Throwable e) {
-                        full.append("logcat进程实际值异常: ").append(e.getMessage()).append("\n");
-                    }
-                }
-                full.append("\n");
-
-                // 3. Xposed模块日志（看模块端自动生成与写入是否成功）
-                full.append("========== Xposed模块日志 ==========\n");
-                try {
-                    Process logcat = Runtime.getRuntime().exec(new String[]{"su", "-c",
-                            "logcat -d -t 500 2>/dev/null | grep -iE 'DeviceReset|AUTO-GENERATE|SentinelDetector|writeFile|identity|Identity' | tail -80"});
-                    java.io.BufferedReader lr = new java.io.BufferedReader(
-                            new java.io.InputStreamReader(logcat.getInputStream()));
-                    String ll;
-                    while ((ll = lr.readLine()) != null) full.append(ll).append("\n");
-                    lr.close();
-                    logcat.waitFor();
-                } catch (Throwable e) {
-                    full.append("logcat读取失败: ").append(e.getMessage()).append("\n");
-                }
-                // 也尝试读LSPosed日志文件（遍历全部.log，日志轮转后旧记录在旧文件里，不能只读最新一个）
-                try {
-                    Process lsp = Runtime.getRuntime().exec(new String[]{"su", "-c",
-                            "echo '---所有日志文件---'; ls -t /data/adb/lspd/log/*.log 2>/dev/null; "
-                          + "echo '---模块全部记录(自动生成/写入/读取)---'; "
-                          + "grep -hE 'DeviceReset|AUTO-GENERATE|SentinelDetector|writeFile|Identity loaded|写入|mkdirs' /data/adb/lspd/log/*.log 2>/dev/null | tail -120"});
-                    java.io.BufferedReader lr2 = new java.io.BufferedReader(
-                            new java.io.InputStreamReader(lsp.getInputStream()));
-                    String ll2;
-                    while ((ll2 = lr2.readLine()) != null) full.append(ll2).append("\n");
-                    lr2.close();
-                    lsp.waitFor();
-                } catch (Throwable e) {
-                    full.append("LSPosed日志读取失败: ").append(e.getMessage()).append("\n");
-                }
-                full.append("\n");
-
-                // 4. 原始调试日志
-                full.append("========== 调试日志 ==========\n");
-                full.append(debugLog.toString());
-
-                // 写入文件
-                String content = full.toString();
-                Process su = Runtime.getRuntime().exec("su");
-                java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
-                os.writeBytes("mkdir -p /sdcard/Download\n");
-                os.writeBytes("cat > /sdcard/Download/111 << 'DRS_DIAG_EOF'\n");
-                os.writeBytes(content + "\n");
-                os.writeBytes("DRS_DIAG_EOF\n");
-                os.writeBytes("chmod 666 /sdcard/Download/111\n");
-                os.writeBytes("ls -l /sdcard/Download/111\n");
-                os.writeBytes("exit\n");
-                os.flush();
-                java.io.BufferedReader reader = new java.io.BufferedReader(
-                        new java.io.InputStreamReader(su.getInputStream()));
-                StringBuilder out = new StringBuilder();
-                String line;
-                while ((line = reader.readLine()) != null) out.append(line);
-                reader.close();
-                su.waitFor();
-                log("诊断日志已写入 /sdcard/Download/111: " + out);
-            } catch (Throwable e) {
-                log("写入诊断日志失败: " + e.getMessage());
-            }
-        }).start();
     }
 
     // ==================== LSPosed 作用域读取（多策略） ====================
@@ -1016,48 +848,6 @@ public class AppPickerActivity extends AppCompatActivity {
             if (p != null) try { p.destroy(); } catch (Throwable ignored) {}
             return null;
         }
-    }
-
-    /**
-     * 枚举一个包在“所有可能存伪装值的位置”的文件，逐个 ls -la 并 cat 内容，用于诊断。
-     * 覆盖：内部 /data/user/<用户0,10..15>/<pkg>/files、/data/user_de/...、/data/data/...、
-     * 外部 /sdcard 与 /storage/emulated/<用户>/Android/data/<pkg>/files；最后 best-effort find。
-     */
-    private String dumpAllIdentityLocations(String pkg) {
-        StringBuilder sc = new StringBuilder();
-        // 内部多用户
-        sc.append("echo '### [内部] /data/user/<用户>/").append(pkg).append("/files ###'\n");
-        sc.append("for U in 0 10 11 12 13 14 15; do\n");
-        sc.append("  D=\"/data/user/$U/").append(pkg).append("/files\"\n");
-        sc.append("  echo \"--- $D ---\"; ls -la \"$D\" 2>&1\n");
-        sc.append("  for F in .identity_sentinel .identity_runtime; do P=\"$D/$F\"; if [ -f \"$P\" ]; then echo \">>> 内容 $P:\"; cat \"$P\" 2>&1; echo; fi; done\n");
-        sc.append("done\n");
-        // user_de（设备加密存储，早期启动可能写这里）
-        sc.append("echo '### [DE加密] /data/user_de/<用户>/").append(pkg).append("/files ###'\n");
-        sc.append("for U in 0 10 11 12 13 14 15; do\n");
-        sc.append("  D=\"/data/user_de/$U/").append(pkg).append("/files\"\n");
-        sc.append("  echo \"--- $D ---\"; ls -la \"$D\" 2>&1\n");
-        sc.append("  for F in .identity_sentinel .identity_runtime; do P=\"$D/$F\"; if [ -f \"$P\" ]; then echo \">>> 内容 $P:\"; cat \"$P\" 2>&1; echo; fi; done\n");
-        sc.append("done\n");
-        // /data/data 符号链接视图
-        sc.append("echo '### [data/data] /data/data/").append(pkg).append("/files ###'\n");
-        sc.append("D=\"/data/data/").append(pkg).append("/files\"; echo \"--- $D ---\"; ls -la \"$D\" 2>&1\n");
-        sc.append("for F in .identity_sentinel .identity_runtime; do P=\"$D/$F\"; if [ -f \"$P\" ]; then echo \">>> 内容 $P:\"; cat \"$P\" 2>&1; echo; fi; done\n");
-        // 外部存储多卷/多用户
-        sc.append("echo '### [外部] <卷>/Android/data/").append(pkg).append("/files ###'\n");
-        sc.append("for M in /sdcard /storage/emulated/0 /storage/emulated/10 /storage/emulated/11 /storage/emulated/12 /storage/emulated/13 /storage/self/primary; do\n");
-        sc.append("  D=\"$M/Android/data/").append(pkg).append("/files\"\n");
-        sc.append("  echo \"--- $D ---\"; ls -la \"$D\" 2>&1\n");
-        sc.append("  for F in .identity_sentinel .identity_runtime; do P=\"$D/$F\"; if [ -f \"$P\" ]; then echo \">>> 内容 $P:\"; cat \"$P\" 2>&1; echo; fi; done\n");
-        sc.append("done\n");
-        // best-effort 全盘查找该包相关的身份文件
-        sc.append("echo '### [find] 该包所有 .identity* 文件 ###'\n");
-        sc.append("find /data/data/").append(pkg).append(" /sdcard/Android/data/").append(pkg)
-          .append(" -name '.identity*' -exec ls -la {} \\; 2>/dev/null\n");
-        sc.append("for U in 0 10 11 12 13 14 15; do find /data/user/$U/").append(pkg)
-          .append(" -name '.identity*' -exec ls -la {} \\; 2>/dev/null; done\n");
-        String out = execSuScriptWithTimeout(sc.toString(), 15, "枚举身份位置");
-        return out == null ? "(枚举超时或失败)\n" : out;
     }
 
     private Set<String> scanIdentityPackages() {
