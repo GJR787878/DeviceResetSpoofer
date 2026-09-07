@@ -254,15 +254,16 @@ public class AppPickerActivity extends AppCompatActivity {
                         }
                     }
                 }
-                // 先读哨兵文件（文件是真相来源），文件不存在说明清过数据，不显示旧值
+                // 先读哨兵文件（文件是真相来源），读到后与本机真实值对比，不同才标蓝
                 String json = readIdentityFileWithRetry(pkg);
                 if (json != null && json.startsWith("{")) {
                     item.identityJson = json;
-                    item.hasIdentity = true;
+                    // 检测到与本机真实值不同 → 自动标蓝
+                    item.hasIdentity = isActuallySpoofed(json);
                     // 同步到SharedPreferences
                     getSharedPreferences("devicereset_ui", MODE_PRIVATE).edit()
                             .putString("identity_" + pkg, json).apply();
-                    log("从文件读取到伪装值 " + pkg + " (" + json.length() + " bytes)");
+                    log("从文件读取到伪装值 " + pkg + " (" + json.length() + " bytes) 与本机不同=" + item.hasIdentity);
                 } else {
                     // 文件不存在或读取失败 → 清除旧的SharedPreferences缓存，显示无伪装值
                     getSharedPreferences("devicereset_ui", MODE_PRIVATE).edit()
@@ -323,11 +324,8 @@ public class AppPickerActivity extends AppCompatActivity {
                 // 写入诊断日志到 Download 文件夹
                 writeDiagToDownload();
             });
-            // 3秒后后台重新扫描哨兵文件，检测模块自动生成的新身份（root此时应已就绪）
-            new Thread(() -> {
-                try { Thread.sleep(3000); } catch (Throwable ignored) {}
-                rescanIdentitiesFromFiles();
-            }).start();
+            // 进入后连续多轮自动重扫，模块一生成新身份就自动标蓝，无需手动生成
+            startAutoRescanSeries();
         }).start();
     }
 
@@ -337,13 +335,14 @@ public class AppPickerActivity extends AppCompatActivity {
         for (AppItem item : appList) {
             String json = readIdentityFile(item.packageName);
             if (json != null && json.startsWith("{")) {
-                // 文件存在，与当前值对比，不同则更新
-                if (!json.equals(item.identityJson)) {
+                // 文件存在，与当前值对比，不同则更新；并与本机真实值对比决定是否标蓝
+                boolean spoofed = isActuallySpoofed(json);
+                if (!json.equals(item.identityJson) || item.hasIdentity != spoofed) {
                     item.identityJson = json;
-                    item.hasIdentity = true;
+                    item.hasIdentity = spoofed;
                     getSharedPreferences("devicereset_ui", MODE_PRIVATE).edit()
                             .putString("identity_" + item.packageName, json).apply();
-                    log("重扫发现新身份 " + item.packageName + " (" + json.length() + " bytes)");
+                    log("重扫发现身份 " + item.packageName + " (" + json.length() + " bytes) 与本机不同=" + spoofed);
                     changed = true;
                 }
             } else {
@@ -365,6 +364,58 @@ public class AppPickerActivity extends AppCompatActivity {
             });
         }
         writeDiagToDownload();
+    }
+
+    /** 判断伪装JSON是否确实与本机真实值不同（关键字段任一不同即视为已伪装） */
+    private boolean isActuallySpoofed(String json) {
+        if (json == null || !json.startsWith("{")) return false;
+        try {
+            org.json.JSONObject o = new org.json.JSONObject(json);
+            String realAndroidId = android.provider.Settings.Secure.getString(
+                    getContentResolver(), android.provider.Settings.Secure.ANDROID_ID);
+            String fakeAndroidId = o.optString("androidId", "");
+            if (!fakeAndroidId.isEmpty() && !fakeAndroidId.equalsIgnoreCase(realAndroidId)) return true;
+            if (!o.optString("brand", "").equalsIgnoreCase(android.os.Build.BRAND)) return true;
+            if (!o.optString("model", "").equals(android.os.Build.MODEL)) return true;
+            if (!o.optString("manufacturer", "").equalsIgnoreCase(android.os.Build.MANUFACTURER)) return true;
+            if (!o.optString("fingerprint", "").equals(android.os.Build.FINGERPRINT)) return true;
+            if (!o.optString("imei", "").isEmpty()) return true;
+            if (!o.optString("serial", "").isEmpty()
+                    && !o.optString("serial", "").equalsIgnoreCase(android.os.Build.SERIAL)) return true;
+            // 关键字段全部和本机相同 = 实际没伪装
+            log("对比真实值：伪装值与本机完全相同，不标蓝 " + fakeAndroidId);
+            return false;
+        } catch (Throwable e) {
+            // 解析失败时，文件既然存在就保守认为有伪装值
+            log("对比真实值解析异常，按有伪装处理: " + e.getMessage());
+            return true;
+        }
+    }
+
+    /**
+     * 进入页面后连续多轮自动重扫：模块写文件可能稍晚于UI加载，
+     * 只要在时间窗内读到与本机不同的伪装值，就自动标蓝，无需用户手动生成。
+     * 所有作用域应用都已识别到伪装值后提前结束。
+     */
+    private void startAutoRescanSeries() {
+        new Thread(() -> {
+            long[] delaysMs = {800, 2000, 4000, 7000, 11000};
+            for (long delay : delaysMs) {
+                try { Thread.sleep(delay); } catch (Throwable ignored) {}
+                if (isFinishing() || isDestroyed()) return;
+                rescanIdentitiesFromFiles();
+                runOnUiThread(this::updateCount);
+                // 所有作用域应用都有伪装值了，停止轮询
+                boolean allHave = !appList.isEmpty();
+                for (AppItem it : appList) {
+                    if (!it.hasIdentity) { allHave = false; break; }
+                }
+                if (allHave) {
+                    log("所有应用均已识别伪装值，停止自动重扫");
+                    return;
+                }
+            }
+        }).start();
     }
 
     /** 更新顶部计数文字 */
@@ -1144,11 +1195,15 @@ public class AppPickerActivity extends AppCompatActivity {
     private void showIdentityDialog(AppItem item) {
         boolean zh = LANG_ZH.equals(currentLang);
         boolean en = LANG_EN.equals(currentLang);
-        // 先读哨兵文件（真相来源），文件不存在则清除旧缓存
-        String json = readIdentityFile(item.packageName);
+        // 先读哨兵文件（真相来源），快速重试3次避免时机问题误判为"无伪装值"
+        String json = readIdentityFileWithRetry(item.packageName);
+        boolean spoofed = false;
+        if (json != null && json.startsWith("{")) {
+            spoofed = isActuallySpoofed(json);
+        }
         if (json != null && json.startsWith("{")) {
             item.identityJson = json;
-            item.hasIdentity = true;
+            item.hasIdentity = spoofed;
             getSharedPreferences("devicereset_ui", MODE_PRIVATE).edit()
                     .putString("identity_" + item.packageName, json).apply();
         } else {
@@ -1159,7 +1214,8 @@ public class AppPickerActivity extends AppCompatActivity {
                     .remove("identity_" + item.packageName).apply();
             json = null;
         }
-        if (json == null) {
+        // 文件存在但内容与本机完全相同（实际未伪装），也按未伪装处理，提示生成
+        if (json == null || !spoofed) {
             String msg, btnGen, btnCancel;
             if (zh) {
                 msg = "该应用暂无伪装值。\n可以立即生成一套随机伪装身份并写入，\n目标应用下次启动时将使用此身份。";
