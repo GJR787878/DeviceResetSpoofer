@@ -320,7 +320,37 @@ public class AppPickerActivity extends AppCompatActivity {
                 // 写入诊断日志到 Download 文件夹
                 writeDiagToDownload();
             });
+            // 3秒后后台重新扫描哨兵文件，检测模块自动生成的新身份（root此时应已就绪）
+            new Thread(() -> {
+                try { Thread.sleep(3000); } catch (Throwable ignored) {}
+                rescanIdentitiesFromFiles();
+            }).start();
         }).start();
+    }
+
+    /** 后台重新扫描所有应用的哨兵文件，发现模块自动生成的新身份则更新UI */
+    private void rescanIdentitiesFromFiles() {
+        boolean changed = false;
+        for (AppItem item : appList) {
+            String json = readIdentityFile(item.packageName);
+            if (json != null && json.startsWith("{")) {
+                // 与当前值对比，不同则更新
+                if (!json.equals(item.identityJson)) {
+                    item.identityJson = json;
+                    item.hasIdentity = true;
+                    getSharedPreferences("devicereset_ui", MODE_PRIVATE).edit()
+                            .putString("identity_" + item.packageName, json).apply();
+                    log("重扫发现新身份 " + item.packageName + " (" + json.length() + " bytes)");
+                    changed = true;
+                }
+            }
+        }
+        if (changed) {
+            runOnUiThread(() -> {
+                adapter.notifyDataSetChanged();
+                updateCount();
+            });
+        }
     }
 
     /** 更新顶部计数文字 */
