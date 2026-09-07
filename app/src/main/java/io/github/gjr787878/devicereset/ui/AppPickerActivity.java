@@ -262,7 +262,8 @@ public class AppPickerActivity extends AppCompatActivity {
                     rvApps.setVisibility(View.GONE);
                 } else {
                     tvEmpty.setVisibility(View.GONE);
-                    tvDebug.setVisibility(View.GONE);
+                    tvDebug.setText(debugLog.toString());
+                    tvDebug.setVisibility(View.VISIBLE);
                     rvApps.setVisibility(View.VISIBLE);
                     int withVal = 0;
                     for (AppItem i : finalItems) if (i.hasIdentity) withVal++;
@@ -274,7 +275,39 @@ public class AppPickerActivity extends AppCompatActivity {
                         tvCount.setText(finalItems.size() + " приложений · " + withVal + " с подменой");
                     }
                 }
+                // 写入诊断日志到 Download 文件夹
+                writeDiagToDownload();
             });
+        }).start();
+    }
+
+    /** 将诊断日志写入 /sdcard/Download/devicereset_diag.txt */
+    private void writeDiagToDownload() {
+        new Thread(() -> {
+            try {
+                String logContent = debugLog.toString();
+                File tmpFile = new File(getCacheDir(), "devicereset_diag.txt");
+                java.nio.file.Files.write(tmpFile.toPath(), logContent.getBytes(StandardCharsets.UTF_8));
+                Process su = Runtime.getRuntime().exec("su");
+                java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
+                os.writeBytes("mkdir -p /sdcard/Download\n");
+                os.writeBytes("cp '" + tmpFile.getAbsolutePath() + "' /sdcard/Download/devicereset_diag.txt\n");
+                os.writeBytes("chmod 666 /sdcard/Download/devicereset_diag.txt\n");
+                os.writeBytes("ls -l /sdcard/Download/devicereset_diag.txt\n");
+                os.writeBytes("exit\n");
+                os.flush();
+                java.io.BufferedReader reader = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(su.getInputStream()));
+                StringBuilder out = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) out.append(line);
+                reader.close();
+                su.waitFor();
+                log("诊断日志已写入Download: " + out);
+                tmpFile.delete();
+            } catch (Throwable e) {
+                log("写入诊断日志失败: " + e.getMessage());
+            }
         }).start();
     }
 
@@ -663,68 +696,76 @@ public class AppPickerActivity extends AppCompatActivity {
     }
 
     private String readIdentityFile(String packageName) {
-        // 先用 find 在所有用户目录下定位哨兵文件（支持工作profile/多用户）
-        List<String> foundPaths = findSentinelPaths(packageName);
-        log("find定位到 " + packageName + " 的哨兵文件: " + foundPaths);
-
-        String tmpPath = "/data/local/tmp/drs_identity_" + System.currentTimeMillis();
-        for (String path : foundPaths) {
-            try {
-                Process su = Runtime.getRuntime().exec("su");
-                java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
-                os.writeBytes("dd if='" + path + "' of='" + tmpPath + "' bs=65536 2>/dev/null\n");
-                os.writeBytes("chmod 666 '" + tmpPath + "' 2>/dev/null\n");
-                os.writeBytes("exit\n");
-                os.flush();
-                java.io.BufferedReader reader = new java.io.BufferedReader(
-                        new java.io.InputStreamReader(su.getInputStream()));
-                reader.close();
-                su.waitFor();
-
-                File tmpFile = new File(tmpPath);
-                if (tmpFile.exists() && tmpFile.length() > 0) {
-                    byte[] data = java.nio.file.Files.readAllBytes(tmpFile.toPath());
-                    String output = new String(data, StandardCharsets.UTF_8).trim();
-                    tmpFile.delete();
-                    if (!output.isEmpty() && output.startsWith("{")) {
-                        log("读取到伪装值 " + packageName + " 从 " + path + " (" + output.length() + " bytes)");
-                        return output;
-                    }
-                }
-            } catch (Throwable e) {
-                log("读取异常 " + packageName + " " + path + ": " + e.getMessage());
-            }
-        }
-        log("未读取到伪装值 " + packageName);
-        return null;
-    }
-
-    /** 用 root find 在所有用户目录下定位目标应用的哨兵文件 */
-    private List<String> findSentinelPaths(String packageName) {
-        List<String> paths = new ArrayList<>();
+        String tmpPath = "/data/local/tmp/drs_read_" + System.currentTimeMillis();
         try {
+            // 一个shell脚本完成：遍历所有用户 → 检查目录 → 检查文件 → 复制 → 输出诊断
+            StringBuilder script = new StringBuilder();
+            script.append("echo '=== 用户列表 ==='\n");
+            script.append("ls -1 /data/user/ 2>/dev/null\n");
+            script.append("echo '=== 搜索哨兵文件 ==='\n");
+            script.append("FOUND=''\n");
+            script.append("for u in /data/user/*/; do\n");
+            script.append("  f=\"${u}").append(packageName).append("/files/.identity_sentinel\"\n");
+            script.append("  if [ -f \"$f\" ]; then\n");
+            script.append("    echo \"FOUND: $f ($(stat -c%s \"$f\" 2>/dev/null || echo unknown) bytes)\"\n");
+            script.append("    head -c 200 \"$f\"\n");
+            script.append("    echo ''\n");
+            script.append("    dd if=\"$f\" of='").append(tmpPath).append("' bs=65536 2>/dev/null\n");
+            script.append("    chmod 666 '").append(tmpPath).append("' 2>/dev/null\n");
+            script.append("    FOUND=\"$f\"\n");
+            script.append("  else\n");
+            script.append("    echo \"MISSING: $f\"\n");
+            script.append("    if [ -d \"${u}").append(packageName).append("\" ]; then\n");
+            script.append("      echo \"  数据目录存在，files内容: $(ls -la \"${u}").append(packageName).append("/files/\" 2>&1 | tr '\\n' ' ')\"\n");
+            script.append("    else\n");
+            script.append("      echo \"  数据目录不存在\"\n");
+            script.append("    fi\n");
+            script.append("  fi\n");
+            script.append("done\n");
+            // 也检查 /data/data/
+            script.append("f2='/data/data/").append(packageName).append("/files/.identity_sentinel'\n");
+            script.append("if [ -f \"$f2\" ] && [ -z \"$FOUND\" ]; then\n");
+            script.append("  echo \"FOUND: $f2\"\n");
+            script.append("  dd if=\"$f2\" of='").append(tmpPath).append("' bs=65536 2>/dev/null\n");
+            script.append("  chmod 666 '").append(tmpPath).append("' 2>/dev/null\n");
+            script.append("fi\n");
+            script.append("echo '=== 完成 ==='\n");
+            script.append("exit\n");
+
             Process su = Runtime.getRuntime().exec("su");
             java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
-            // 在 /data/user/ 下所有用户目录搜索，同时也搜 /data/data/
-            os.writeBytes("find /data/user/ -maxdepth 4 -path '*/" + packageName + "/files/.identity_sentinel' 2>/dev/null\n");
-            os.writeBytes("find /data/data/ -maxdepth 3 -path '*/" + packageName + "/files/.identity_sentinel' 2>/dev/null\n");
-            os.writeBytes("exit\n");
+            os.writeBytes(script.toString());
             os.flush();
             java.io.BufferedReader reader = new java.io.BufferedReader(
                     new java.io.InputStreamReader(su.getInputStream()));
+            StringBuilder diag = new StringBuilder();
             String line;
             while ((line = reader.readLine()) != null) {
-                line = line.trim();
-                if (!line.isEmpty() && line.endsWith(".identity_sentinel") && !paths.contains(line)) {
-                    paths.add(line);
-                }
+                diag.append(line).append("\n");
             }
             reader.close();
             su.waitFor();
+            log("读取诊断 " + packageName + ":\n" + diag);
+
+            File tmpFile = new File(tmpPath);
+            if (tmpFile.exists() && tmpFile.length() > 0) {
+                byte[] data = java.nio.file.Files.readAllBytes(tmpFile.toPath());
+                String output = new String(data, StandardCharsets.UTF_8).trim();
+                tmpFile.delete();
+                if (!output.isEmpty() && output.startsWith("{")) {
+                    log("成功读取伪装值 " + packageName + " (" + output.length() + " bytes)");
+                    return output;
+                } else {
+                    log("文件内容不是JSON: " + output.substring(0, Math.min(100, output.length())));
+                }
+            } else {
+                log("临时文件不存在或为空: " + tmpPath);
+            }
         } catch (Throwable e) {
-            log("find哨兵文件失败 " + packageName + ": " + e.getMessage());
+            log("读取异常 " + packageName + ": " + e.getMessage());
         }
-        return paths;
+        log("未读取到伪装值 " + packageName);
+        return null;
     }
 
     /** 生成随机身份并写入目标应用的哨兵文件 */
