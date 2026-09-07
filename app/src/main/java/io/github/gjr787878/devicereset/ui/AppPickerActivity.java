@@ -254,23 +254,26 @@ public class AppPickerActivity extends AppCompatActivity {
                         }
                     }
                 }
-                // 直接读取哨兵文件（不依赖扫描），只要文件存在且是合法JSON就标记有伪装值
-                String json = readIdentityFile(pkg);
-                if (json == null) {
-                    // 重试两次（root刚就绪时第一次调用可能失败）
-                    try { Thread.sleep(500); } catch (Throwable ignored) {}
-                    json = readIdentityFile(pkg);
-                }
-                if (json == null) {
-                    try { Thread.sleep(500); } catch (Throwable ignored) {}
-                    json = readIdentityFile(pkg);
-                }
+                // 优先从SharedPreferences读取（UI自己生成的伪装值，无需root）
+                String json = getSharedPreferences("devicereset_ui", MODE_PRIVATE)
+                        .getString("identity_" + pkg, null);
                 if (json != null && json.startsWith("{")) {
                     item.identityJson = json;
                     item.hasIdentity = true;
-                    log("检测到伪装值 " + pkg + " (" + json.length() + " bytes)");
+                    log("从SharedPreferences读取到伪装值 " + pkg + " (" + json.length() + " bytes)");
                 } else {
-                    log("未检测到伪装值 " + pkg + " json=" + (json == null ? "null" : json.substring(0, Math.min(50, json.length()))));
+                    // SharedPreferences没有，尝试从目标应用目录读取（模块自动生成的）
+                    json = readIdentityFileWithRetry(pkg);
+                    if (json != null && json.startsWith("{")) {
+                        item.identityJson = json;
+                        item.hasIdentity = true;
+                        // 同步保存到SharedPreferences
+                        getSharedPreferences("devicereset_ui", MODE_PRIVATE).edit()
+                                .putString("identity_" + pkg, json).apply();
+                        log("从目标目录读取到伪装值并同步到prefs " + pkg);
+                    } else {
+                        log("未检测到伪装值 " + pkg);
+                    }
                 }
                 items.add(item);
                 log("已添加: " + pkg + " name=" + item.appName + " iconIsDefault=" + (item.icon == defaultIcon) + " hasIdentity=" + item.hasIdentity);
@@ -822,6 +825,16 @@ public class AppPickerActivity extends AppCompatActivity {
         return null;
     }
 
+    /** 带重试的读取，最多3次 */
+    private String readIdentityFileWithRetry(String packageName) {
+        for (int i = 0; i < 3; i++) {
+            String json = readIdentityFile(packageName);
+            if (json != null && json.startsWith("{")) return json;
+            try { Thread.sleep(500); } catch (Throwable ignored) {}
+        }
+        return null;
+    }
+
     /** 生成随机身份并写入目标应用的哨兵文件 */
     private void generateAndWriteIdentity(AppItem item) {
         new Thread(() -> {
@@ -832,6 +845,10 @@ public class AppPickerActivity extends AppCompatActivity {
                 if (ok) {
                     item.identityJson = json;
                     item.hasIdentity = true;
+                    // 保存到SharedPreferences，UI自己记住，下次进入无需root读取
+                    getSharedPreferences("devicereset_ui", MODE_PRIVATE).edit()
+                            .putString("identity_" + item.packageName, json).apply();
+                    log("已保存伪装值到SharedPreferences " + item.packageName);
                     runOnUiThread(() -> {
                         adapter.notifyDataSetChanged();
                         updateCount();
@@ -958,12 +975,24 @@ public class AppPickerActivity extends AppCompatActivity {
     private void showIdentityDialog(AppItem item) {
         boolean zh = LANG_ZH.equals(currentLang);
         boolean en = LANG_EN.equals(currentLang);
-        // 始终尝试读取，不依赖预扫描结果
+        // 优先从内存 → SharedPreferences → 目标目录读取
         String json = item.identityJson;
         if (json == null) {
+            json = getSharedPreferences("devicereset_ui", MODE_PRIVATE)
+                    .getString("identity_" + item.packageName, null);
+            if (json != null) {
+                item.identityJson = json;
+                item.hasIdentity = true;
+            }
+        }
+        if (json == null) {
             json = readIdentityFile(item.packageName);
-            item.identityJson = json;
-            if (json != null) item.hasIdentity = true;
+            if (json != null) {
+                item.identityJson = json;
+                item.hasIdentity = true;
+                getSharedPreferences("devicereset_ui", MODE_PRIVATE).edit()
+                        .putString("identity_" + item.packageName, json).apply();
+            }
         }
         if (json == null) {
             String msg, btnGen, btnCancel;
