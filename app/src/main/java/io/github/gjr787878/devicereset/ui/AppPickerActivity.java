@@ -543,6 +543,20 @@ public class AppPickerActivity extends AppCompatActivity {
                     } catch (Throwable e) {
                         full.append("运行时值读取异常: ").append(e.getMessage()).append("\n");
                     }
+                    // logcat兜底：模块最后一次加载记录（免重启也能看到进程实际值）
+                    try {
+                        Identity logcatId = readRuntimeFromLogcat(item.packageName);
+                        full.append("logcat进程实际值: ");
+                        if (logcatId != null) {
+                            full.append("androidId=").append(logcatId.androidId)
+                                .append(" brand=").append(logcatId.brand)
+                                .append(" model=").append(logcatId.model).append("\n");
+                        } else {
+                            full.append("无（该应用最近未启动过，或日志已被冲掉）\n");
+                        }
+                    } catch (Throwable e) {
+                        full.append("logcat进程实际值异常: ").append(e.getMessage()).append("\n");
+                    }
                 }
                 full.append("\n");
 
@@ -1148,6 +1162,48 @@ public class AppPickerActivity extends AppCompatActivity {
         return readFirstExistingFile(paths, packageName, "运行时");
     }
 
+    /**
+     * logcat兜底：从LSPosed/Xposed日志解析该包最后一次 "Identity loaded: androidId=.., model=.., brand=.."。
+     * 即使没重启、新模块的.identity_runtime还没生成，旧模块启动时也会打这条日志，
+     * 从而拿到进程真正加载的值（仅androidId/brand/model等已打印字段）。
+     */
+    private Identity readRuntimeFromLogcat(String packageName) {
+        try {
+            String script = "logcat -d 2>/dev/null | grep '" + packageName + "' | grep 'Identity loaded' | tail -1\n";
+            String line = execSuScriptWithTimeout(script, 8, "logcat运行时");
+            if (line == null || line.trim().isEmpty()) {
+                log("logcat无运行时记录 " + packageName);
+                return null;
+            }
+            line = line.trim();
+            log("logcat运行时记录: " + line);
+            String aid = extractField(line, "androidId=", ',');
+            if (aid == null || aid.isEmpty()) return null;
+            Identity id = new Identity();
+            id.androidId = aid;
+            id.model = extractField(line, "model=", ',');
+            id.brand = extractField(line, "brand=", null);
+            id.manufacturer = id.brand;
+            return id;
+        } catch (Throwable e) {
+            log("logcat运行时解析异常: " + e.getMessage());
+            return null;
+        }
+    }
+
+    /** 从 "key=value," 或行尾 "key=value" 中取值 */
+    private String extractField(String line, String key, Character stop) {
+        int i = line.indexOf(key);
+        if (i < 0) return null;
+        int start = i + key.length();
+        int end = line.length();
+        if (stop != null) {
+            int j = line.indexOf(stop, start);
+            if (j >= 0) end = j;
+        }
+        return line.substring(start, end).trim();
+    }
+
     /** 判断目标应用进程当前是否正在运行（返回进程名列表字符串） */
     private String getRunningProcessInfo(String packageName) {
         try {
@@ -1393,9 +1449,10 @@ public class AppPickerActivity extends AppCompatActivity {
             new AlertDialog.Builder(this).setTitle(title).setPositiveButton(ok, null).show();
             return;
         }
-        // 读取目标进程当前真正在用的运行时值（模块每次加载写.identity_runtime），只显示这一套
+        // 实际使用值优先级：①模块写的.identity_runtime文件 ②logcat里模块最后加载记录(免重启) ③已保存值
         String runtimeJson = readRuntimeFile(item.packageName);
         Identity runtimeId = Identity.fromJson(runtimeJson);
+        if (runtimeId == null) runtimeId = readRuntimeFromLogcat(item.packageName);
         // 主显示：优先运行时实际值，没有则回退已保存值
         Identity id = runtimeId != null ? runtimeId : savedId;
 
