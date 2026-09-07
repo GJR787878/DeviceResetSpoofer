@@ -970,19 +970,45 @@ public class AppPickerActivity extends AppCompatActivity {
             return false;
         }
 
+        // 第一步：先写到 /data/local/tmp/ 验证内容
+        String tmpPath = "/data/local/tmp/drs_write_" + System.currentTimeMillis() + ".json";
+        try {
+            Process su0 = Runtime.getRuntime().exec("su");
+            java.io.DataOutputStream os0 = new java.io.DataOutputStream(su0.getOutputStream());
+            os0.writeBytes("cat > '" + tmpPath + "' << 'DRS_WRITE_EOF'\n");
+            os0.writeBytes(json + "\n");
+            os0.writeBytes("DRS_WRITE_EOF\n");
+            os0.writeBytes("ls -l '" + tmpPath + "'\n");
+            os0.writeBytes("exit\n");
+            os0.flush();
+            java.io.BufferedReader r0 = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(su0.getInputStream()));
+            StringBuilder out0 = new StringBuilder();
+            String ln;
+            while ((ln = r0.readLine()) != null) out0.append(ln);
+            r0.close();
+            su0.waitFor();
+            log("写入临时文件结果: " + out0);
+            if (!out0.toString().contains(tmpPath)) {
+                log("临时文件写入失败！");
+                return false;
+            }
+        } catch (Throwable e) {
+            log("临时文件写入异常: " + e.getMessage());
+            return false;
+        }
+
+        // 第二步：用 dd 复制到每个目标目录
         boolean anySuccess = false;
         for (String dir : dirs) {
             try {
                 String target = dir + "/.identity_sentinel";
                 Process su = Runtime.getRuntime().exec("su");
                 java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
-                // 用heredoc直接写入内容，不经过App私有目录
                 os.writeBytes("mkdir -p '" + dir + "'\n");
-                os.writeBytes("cat > '" + target + "' << 'DRS_IDENTITY_EOF'\n");
-                os.writeBytes(json + "\n");
-                os.writeBytes("DRS_IDENTITY_EOF\n");
+                os.writeBytes("dd if='" + tmpPath + "' of='" + target + "' bs=65536\n");
                 os.writeBytes("chmod 666 '" + target + "'\n");
-                os.writeBytes("if [ -f '" + target + "' ]; then echo 'OK:'$(wc -c < '" + target + "'); else echo 'FAIL'; fi\n");
+                os.writeBytes("ls -l '" + target + "'\n");
                 os.writeBytes("exit\n");
                 os.flush();
                 java.io.BufferedReader reader = new java.io.BufferedReader(
@@ -992,20 +1018,25 @@ public class AppPickerActivity extends AppCompatActivity {
                 while ((line = reader.readLine()) != null) out.append(line);
                 reader.close();
                 su.waitFor();
-                log("写入结果 " + target + ": " + out);
-                if (out.toString().startsWith("OK:")) {
+                log("dd写入结果 " + target + ": " + out);
+                if (out.toString().contains(target) && out.toString().contains(".identity_sentinel")) {
                     anySuccess = true;
-                    log("写入成功 " + target + " (" + json.length() + " bytes)");
+                    log("写入成功 " + target);
                 }
             } catch (Throwable e) {
                 log("写入异常 " + dir + ": " + e.getMessage());
             }
         }
+
+        // 清理临时文件
+        try {
+            Runtime.getRuntime().exec(new String[]{"su", "-c", "rm -f '" + tmpPath + "'"});
+        } catch (Throwable ignored) {}
+
         if (anySuccess) {
-            // 验证：重新读取确认
             try { Thread.sleep(300); } catch (Throwable ignored) {}
             String verify = readIdentityFile(packageName);
-            if (verify != null) {
+            if (verify != null && verify.startsWith("{")) {
                 log("写入验证成功，读取到 " + verify.length() + " bytes");
                 return true;
             } else {
