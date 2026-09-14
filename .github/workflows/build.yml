@@ -20,7 +20,13 @@ jobs:
           distribution: 'temurin'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        # android-actions/setup-android@v3 已停止维护，与新 cmdline-tools 不兼容
+        # (sdkmanager 报 Failed to find package 'tools')，改为接受 license，
+        # 缺失的 platform/build-tools 由 Gradle 自动下载。
+        run: |
+          mkdir -p "$ANDROID_HOME/licenses"
+          printf "8933bad161af4178b1185d1a37fbf41ea5269c55\nd56f5187479451eabf01fb78af6dfcb131a6481e\n24333f8a63b6825ea9c5514f83c2829b004d1fee\n" > "$ANDROID_HOME/licenses/android-sdk-license"
+          echo "Android SDK licenses accepted at $ANDROID_HOME"
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
