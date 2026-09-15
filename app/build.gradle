@@ -2,6 +2,10 @@ plugins {
     id 'com.android.application'
 }
 
+// 统一签名：本地与CI使用同一keystore，保证覆盖安装/升级
+def keystorePath = System.getenv("DRS_KEYSTORE_PATH") ?: "keystore/devicereset-release.keystore"
+def keystorePass = System.getenv("DRS_KEYSTORE_PASS") ?: "DRS_Key_2026!"
+
 android {
     namespace 'io.github.gjr787878.devicereset'
     compileSdk 34
@@ -14,10 +18,23 @@ android {
         versionName "2.2"
     }
 
+    signingConfigs {
+        release {
+            storeFile file(keystorePath)
+            storePassword keystorePass
+            keyAlias "devicereset"
+            keyPassword keystorePass
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig signingConfigs.release
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.release
         }
     }
 
