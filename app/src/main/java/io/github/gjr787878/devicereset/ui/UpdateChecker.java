@@ -17,6 +17,8 @@ import java.net.URL;
  *    （api.github.com 在部分网络（如国内 DNS）解析失败时使用）
  * 3. CDN/代理：jsDelivr 多节点 + GitHub raw 国内代理，读仓库根 latest_version.txt
  *    （GitHub 域名整体不可达时使用；多源取最大版本，避免旧缓存误判）
+ *
+ * 自动重试：DNS 波动时域名解析可能瞬时失败，最多重试 3 轮。
  */
 public class UpdateChecker {
 
@@ -43,57 +45,85 @@ public class UpdateChecker {
             boolean hasUpdate = false;
             String error = null;
 
-            // 通道一：GitHub API
-            try {
-                tag = fetchLatestTagFromApi(repo);
-            } catch (Exception e) {
-                error = e.getMessage();
-            }
+            /*
+             * 自动重试：国内 DNS 波动时域名解析可能瞬时失败，
+             * 重试 3 轮（每轮尝试全部通道），大幅提升成功率。
+             */
+            final int MAX_ATTEMPTS = 3;
 
-            // 通道一失败 → 通道二：github.com 页面 302 重定向
-            if (tag == null || tag.isEmpty()) {
+            for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+
+                latest = null;
+                tag = null;
+
+                // 通道一：GitHub API
                 try {
-                    tag = fetchLatestTagFromPage(repo);
-                    error = null;
-                } catch (Exception e2) {
-                    error = e2.getMessage();
+                    tag = fetchLatestTagFromApi(repo);
+                } catch (Exception e) {
+                    error = e.getMessage();
                 }
-            }
 
-            // 通道二失败 → 通道三：国内可直连的 CDN / GitHub 代理（多源取最大版本）
-            if (tag == null || tag.isEmpty()) {
-                String[] urls = {
-                        "https://cdn.jsdelivr.net/gh/" + repo + "@main/latest_version.txt",
-                        "https://fastly.jsdelivr.net/gh/" + repo + "@main/latest_version.txt",
-                        "https://gcore.jsdelivr.net/gh/" + repo + "@main/latest_version.txt",
-                        "https://ghfast.top/https://raw.githubusercontent.com/" + repo + "/main/latest_version.txt",
-                        "https://gh-proxy.com/https://raw.githubusercontent.com/" + repo + "/main/latest_version.txt",
-                        "https://ghproxy.net/https://raw.githubusercontent.com/" + repo + "/main/latest_version.txt"
-                };
-                String best = null;
-                String cdnError = null;
-                for (String u : urls) {
+                // 通道一失败 → 通道二：github.com 页面 302 重定向
+                if (tag == null || tag.isEmpty()) {
                     try {
-                        String v = fetchLatestVersionFromUrl(u);
-                        if (v != null && (best == null || compareVersions(v, best) > 0)) {
-                            best = v;
-                        }
-                    } catch (Exception ex) {
-                        if (cdnError == null) cdnError = ex.getMessage();
+                        tag = fetchLatestTagFromPage(repo);
+                        error = null;
+                    } catch (Exception e2) {
+                        error = e2.getMessage();
                     }
                 }
-                if (best != null) {
-                    latest = best;
-                    tag = "v" + best;
-                    error = null;
-                } else if (cdnError != null) {
-                    error = "CDN: " + cdnError;
+
+                // 通道二失败 → 通道三：国内可直连的 CDN / GitHub 代理（多源取最大版本）
+                if (tag == null || tag.isEmpty()) {
+                    String[] urls = {
+                            "https://cdn.jsdelivr.net/gh/" + repo + "@main/latest_version.txt",
+                            "https://fastly.jsdelivr.net/gh/" + repo + "@main/latest_version.txt",
+                            "https://gcore.jsdelivr.net/gh/" + repo + "@main/latest_version.txt",
+                            "https://ghfast.top/https://raw.githubusercontent.com/" + repo + "/main/latest_version.txt",
+                            "https://gh-proxy.com/https://raw.githubusercontent.com/" + repo + "/main/latest_version.txt",
+                            "https://ghproxy.net/https://raw.githubusercontent.com/" + repo + "/main/latest_version.txt"
+                    };
+                    String best = null;
+                    String cdnError = null;
+                    for (String u : urls) {
+                        try {
+                            String v = fetchLatestVersionFromUrl(u);
+                            if (v != null && (best == null || compareVersions(v, best) > 0)) {
+                                best = v;
+                            }
+                        } catch (Exception ex) {
+                            if (cdnError == null) cdnError = ex.getMessage();
+                        }
+                    }
+                    if (best != null) {
+                        latest = best;
+                        tag = "v" + best;
+                        error = null;
+                    } else if (cdnError != null) {
+                        error = "CDN: " + cdnError;
+                    }
+                }
+
+                if (latest == null && tag != null && !tag.isEmpty()) {
+                    latest = extractVersion(tag);
+                }
+
+                if (latest != null) {
+                    break;
+                }
+
+                if (attempt < MAX_ATTEMPTS) {
+                    try {
+                        Thread.sleep(1500);
+                    } catch (InterruptedException ignored) {
+                    }
                 }
             }
 
-            if (latest == null && tag != null && !tag.isEmpty()) {
-                latest = extractVersion(tag);
+            if (latest == null && error != null) {
+                error = "网络异常（已重试 " + MAX_ATTEMPTS + " 次）: " + error;
             }
+
             if (latest != null && currentVersion != null) {
                 hasUpdate = compareVersions(latest, currentVersion) > 0;
             }
