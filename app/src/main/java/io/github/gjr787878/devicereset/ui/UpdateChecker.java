@@ -34,7 +34,8 @@ import javax.net.ssl.X509TrustManager;
  *    （GitHub 域名整体不可达时使用；多源取最大版本，避免旧缓存误判）
  *
  * 自动重试：DNS 波动时域名解析可能瞬时失败，最多重试 3 轮。
- * 4. IP 直连：DNS 污染导致所有域名解析失败时，用 GitHub 已知 IP 直连。
+ * 4. IP 直连：DNS 污染 + IP 封锁时，用 GitHub 已知 Anycast IP 直连（raw + API）。
+ * 错误按通道汇总，便于定位具体哪个源失败。
  */
 public class UpdateChecker {
 
@@ -71,21 +72,21 @@ public class UpdateChecker {
 
                 latest = null;
                 tag = null;
+                StringBuilder errs = new StringBuilder();
 
                 // 通道一：GitHub API
                 try {
                     tag = fetchLatestTagFromApi(repo);
                 } catch (Exception e) {
-                    error = e.getMessage();
+                    errs.append("[API:").append(e.getMessage()).append("]");
                 }
 
                 // 通道一失败 → 通道二：github.com 页面 302 重定向
                 if (tag == null || tag.isEmpty()) {
                     try {
                         tag = fetchLatestTagFromPage(repo);
-                        error = null;
                     } catch (Exception e2) {
-                        error = e2.getMessage();
+                        errs.append("[页面:").append(e2.getMessage()).append("]");
                     }
                 }
 
@@ -97,10 +98,14 @@ public class UpdateChecker {
                             "https://gcore.jsdelivr.net/gh/" + repo + "@main/latest_version.txt",
                             "https://ghfast.top/https://raw.githubusercontent.com/" + repo + "/main/latest_version.txt",
                             "https://gh-proxy.com/https://raw.githubusercontent.com/" + repo + "/main/latest_version.txt",
-                            "https://ghproxy.net/https://raw.githubusercontent.com/" + repo + "/main/latest_version.txt"
+                            "https://ghproxy.net/https://raw.githubusercontent.com/" + repo + "/main/latest_version.txt",
+                            "https://github.moeyy.xyz/https://raw.githubusercontent.com/" + repo + "/main/latest_version.txt",
+                            "https://ghproxy.cc/https://raw.githubusercontent.com/" + repo + "/main/latest_version.txt",
+                            "https://gh.llkk.cc/https://raw.githubusercontent.com/" + repo + "/main/latest_version.txt",
+                            "https://mirror.ghproxy.com/https://raw.githubusercontent.com/" + repo + "/main/latest_version.txt"
                     };
                     String best = null;
-                    String cdnError = null;
+                    StringBuilder cdnErr = new StringBuilder();
                     for (String u : urls) {
                         try {
                             String v = fetchLatestVersionFromUrl(u);
@@ -108,30 +113,50 @@ public class UpdateChecker {
                                 best = v;
                             }
                         } catch (Exception ex) {
-                            if (cdnError == null) cdnError = ex.getMessage();
+                            if (cdnErr.length() < 140) {
+                                if (cdnErr.length() > 0) cdnErr.append("; ");
+                                cdnErr.append(hostOf(u)).append(":").append(ex.getMessage());
+                            }
                         }
                     }
                     if (best != null) {
                         latest = best;
                         tag = "v" + best;
-                        error = null;
-                    } else if (cdnError != null) {
-                        error = "CDN: " + cdnError;
+                    } else if (cdnErr.length() > 0) {
+                        errs.append("[代理:").append(cdnErr).append("]");
                     }
                 }
 
                 // 通道四：IP 直连兜底（绕过 DNS 污染，用已知 IP + Host 头 + TLS SNI）
                 if (latest == null) {
+                    StringBuilder ipErr = new StringBuilder();
                     try {
                         String v = fetchViaIpFallback("raw.githubusercontent.com",
-                                "/" + repo + "/main/latest_version.txt");
+                                RAW_IPS, "/" + repo + "/main/latest_version.txt", null);
                         if (v != null) {
                             latest = v;
                             tag = "v" + v;
-                            error = null;
                         }
                     } catch (Exception ex) {
-                        error = "IP直连: " + ex.getMessage();
+                        ipErr.append("raw:").append(ex.getMessage());
+                    }
+                    if (latest == null) {
+                        try {
+                            String t = fetchViaIpFallback("api.github.com",
+                                    API_IPS, "/repos/" + repo + "/releases/latest", "tag_name");
+                            if (t != null && !t.isEmpty()) {
+                                tag = t;
+                            }
+                        } catch (Exception ex) {
+                            if (ipErr.length() > 0) ipErr.append("; ");
+                            ipErr.append("api:").append(ex.getMessage());
+                        }
+                    }
+                    if (latest == null && tag != null && !tag.isEmpty()) {
+                        latest = extractVersion(tag);
+                    }
+                    if (latest == null && ipErr.length() > 0) {
+                        errs.append("[IP直连:").append(ipErr).append("]");
                     }
                 }
 
@@ -140,7 +165,13 @@ public class UpdateChecker {
                 }
 
                 if (latest != null) {
+                    error = null;
                     break;
+                }
+
+                error = errs.toString();
+                if (error.length() > 300) {
+                    error = error.substring(0, 300) + "...";
                 }
 
                 if (attempt < MAX_ATTEMPTS) {
@@ -167,7 +198,6 @@ public class UpdateChecker {
                     () -> callback.onResult(fLatest, fTag, fHas, fError));
         }).start();
     }
-
     /** 通道一：GitHub API 获取最新 tag */
     private static String fetchLatestTagFromApi(String repo) throws Exception {
         URL url = new URL("https://api.github.com/repos/" + repo + "/releases/latest");
@@ -243,18 +273,27 @@ public class UpdateChecker {
         throw new Exception("HTTP " + code);
     }
 
+    /** 通道四：IP 直连绕过 DNS 污染。用已知 IP 连接 + Host 头 + TLS SNI。 */
+    private static final String[] RAW_IPS = {
+            "185.199.108.133",
+            "185.199.109.133",
+            "185.199.110.133",
+            "185.199.111.133"
+    };
+    private static final String[] API_IPS = {
+            "140.82.112.6",
+            "140.82.113.6",
+            "140.82.114.6",
+            "140.82.116.6"
+    };
+
     /**
-     * 通道四：IP 直连绕过 DNS 污染。
-     * 用 GitHub raw 的 Anycast IP 连接，Header 带 Host，
-     * TLS 设置 SNI（否则服务器拒绝握手），跳过证书域名校验。
+     * IP 直连：jsonKey 为 null 时读首行纯版本号；
+     * 非 null 时解析 JSON 并返回该字段（如 tag_name）。
      */
-    private static String fetchViaIpFallback(String host, String path) throws Exception {
-        String[] ips = {
-                "185.199.108.133",
-                "185.199.109.133",
-                "185.199.110.133",
-                "185.199.111.133"
-        };
+    private static String fetchViaIpFallback(String host, String[] ips,
+                                             String path, String jsonKey)
+            throws Exception {
         Exception last = null;
         for (String ip : ips) {
             try {
@@ -343,13 +382,23 @@ public class UpdateChecker {
                     InputStream is = conn.getInputStream();
                     BufferedReader r = new BufferedReader(
                             new InputStreamReader(is, "UTF-8"));
-                    String v = r.readLine();
+                    StringBuilder sb = new StringBuilder();
+                    String line;
+                    while ((line = r.readLine()) != null) {
+                        sb.append(line);
+                    }
                     r.close();
                     conn.disconnect();
-                    if (v != null) {
-                        v = v.trim();
-                        if (v.matches("\\d+(\\.\\d+)*")) {
+                    if (jsonKey == null) {
+                        String v = sb.toString().trim();
+                        if (v.matches("\d+(\.\d+)*")) {
                             return v;
+                        }
+                    } else {
+                        JSONObject json = new JSONObject(sb.toString());
+                        String t = json.optString(jsonKey, "");
+                        if (!t.isEmpty()) {
+                            return t;
                         }
                     }
                 }
@@ -362,6 +411,14 @@ public class UpdateChecker {
         throw last != null ? last : new Exception("IP fallback failed");
     }
 
+    /** 从 URL 提取域名（用于错误提示） */
+    private static String hostOf(String urlStr) {
+        try {
+            return new URL(urlStr).getHost();
+        } catch (Exception e) {
+            return urlStr;
+        }
+    }
     /** 从 tag（如 v2.5 / 25-v2.4 / 1.3.9）提取版本号，失败返回 null */
     public static String extractVersion(String tag) {
         if (tag == null) return null;
