@@ -53,6 +53,16 @@ jobs:
       - name: Build Debug APK
         run: ./gradlew assembleDebug --stacktrace
 
+      - name: Verify APK signature
+        run: |
+          apksigner="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner"
+          echo "=== APK签名证书 ==="
+          "$apksigner" verify --print-certs app/build/outputs/apk/debug/app-debug.apk
+          echo "=== 期望keystore指纹 ==="
+          keytool -list -v -keystore keystore/devicereset-release.keystore -storepass "$DRS_KEYSTORE_PASS" 2>/dev/null | grep -E "SHA1|SHA256"
+        env:
+          DRS_KEYSTORE_PASS: ${{ secrets.DRS_KEYSTORE_PASS }}
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
