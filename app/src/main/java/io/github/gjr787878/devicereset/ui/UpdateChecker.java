@@ -15,7 +15,8 @@ import java.net.URL;
  * 1. API：https://api.github.com/repos/<repo>/releases/latest（标准方式）
  * 2. 页面：https://github.com/<repo>/releases/latest 的 302 重定向提取 tag
  *    （api.github.com 在部分网络（如国内 DNS）解析失败时使用）
- * 3. CDN：jsDelivr 读取仓库根 latest_version.txt（GitHub 域名整体不可达时使用）
+ * 3. CDN/代理：jsDelivr 多节点 + GitHub raw 国内代理，读仓库根 latest_version.txt
+ *    （GitHub 域名整体不可达时使用；多源取最大版本，避免旧缓存误判）
  */
 public class UpdateChecker {
 
@@ -59,25 +60,34 @@ public class UpdateChecker {
                 }
             }
 
-            // 通道二失败 → 通道三：jsDelivr CDN（国内可直连，读仓库根 latest_version.txt）
+            // 通道二失败 → 通道三：国内可直连的 CDN / GitHub 代理（多源取最大版本）
             if (tag == null || tag.isEmpty()) {
-                String[] mirrors = {
-                        "https://cdn.jsdelivr.net/gh/",
-                        "https://fastly.jsdelivr.net/gh/",
-                        "https://gcore.jsdelivr.net/gh/"
+                String[] urls = {
+                        "https://cdn.jsdelivr.net/gh/" + repo + "@main/latest_version.txt",
+                        "https://fastly.jsdelivr.net/gh/" + repo + "@main/latest_version.txt",
+                        "https://gcore.jsdelivr.net/gh/" + repo + "@main/latest_version.txt",
+                        "https://ghfast.top/https://raw.githubusercontent.com/" + repo + "/main/latest_version.txt",
+                        "https://gh-proxy.com/https://raw.githubusercontent.com/" + repo + "/main/latest_version.txt",
+                        "https://ghproxy.net/https://raw.githubusercontent.com/" + repo + "/main/latest_version.txt"
                 };
-                for (String base : mirrors) {
+                String best = null;
+                String cdnError = null;
+                for (String u : urls) {
                     try {
-                        String v = fetchLatestVersionFromJsDelivr(
-                                base + repo + "@main/latest_version.txt");
-                        if (v != null) {
-                            latest = v;
-                            tag = "v" + v;
-                            error = null;
-                            break;
+                        String v = fetchLatestVersionFromUrl(u);
+                        if (v != null && (best == null || compareVersions(v, best) > 0)) {
+                            best = v;
                         }
-                    } catch (Exception ignored) {
+                    } catch (Exception ex) {
+                        if (cdnError == null) cdnError = ex.getMessage();
                     }
+                }
+                if (best != null) {
+                    latest = best;
+                    tag = "v" + best;
+                    error = null;
+                } else if (cdnError != null) {
+                    error = "CDN: " + cdnError;
                 }
             }
 
@@ -147,8 +157,8 @@ public class UpdateChecker {
         throw new Exception("HTTP " + code);
     }
 
-    /** 通道三：jsDelivr CDN 读取仓库根 latest_version.txt（纯版本号，如 2.6） */
-    private static String fetchLatestVersionFromJsDelivr(String urlStr) throws Exception {
+    /** 通道三：从任意 URL 读取纯版本号（如 2.6），失败抛异常 */
+    private static String fetchLatestVersionFromUrl(String urlStr) throws Exception {
         URL url = new URL(urlStr);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setConnectTimeout(8000);
