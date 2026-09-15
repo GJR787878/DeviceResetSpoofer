@@ -6,7 +6,22 @@ import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
+import java.net.InetAddress;
+import java.net.Socket;
 import java.net.URL;
+import java.security.SecureRandom;
+import java.security.cert.X509Certificate;
+import java.util.Collections;
+import java.util.List;
+
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SNIHostName;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLParameters;
+import javax.net.ssl.SSLSocket;
+import javax.net.ssl.SSLSocketFactory;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
 
 /**
  * 自动更新检测：查询 GitHub 仓库最新 Release，与本地版本比较。
@@ -19,6 +34,7 @@ import java.net.URL;
  *    （GitHub 域名整体不可达时使用；多源取最大版本，避免旧缓存误判）
  *
  * 自动重试：DNS 波动时域名解析可能瞬时失败，最多重试 3 轮。
+ * 4. IP 直连：DNS 污染导致所有域名解析失败时，用 GitHub 已知 IP 直连。
  */
 public class UpdateChecker {
 
@@ -101,6 +117,21 @@ public class UpdateChecker {
                         error = null;
                     } else if (cdnError != null) {
                         error = "CDN: " + cdnError;
+                    }
+                }
+
+                // 通道四：IP 直连兜底（绕过 DNS 污染，用已知 IP + Host 头 + TLS SNI）
+                if (latest == null) {
+                    try {
+                        String v = fetchViaIpFallback("raw.githubusercontent.com",
+                                "/" + repo + "/main/latest_version.txt");
+                        if (v != null) {
+                            latest = v;
+                            tag = "v" + v;
+                            error = null;
+                        }
+                    } catch (Exception ex) {
+                        error = "IP直连: " + ex.getMessage();
                     }
                 }
 
@@ -210,6 +241,125 @@ public class UpdateChecker {
         }
         conn.disconnect();
         throw new Exception("HTTP " + code);
+    }
+
+    /**
+     * 通道四：IP 直连绕过 DNS 污染。
+     * 用 GitHub raw 的 Anycast IP 连接，Header 带 Host，
+     * TLS 设置 SNI（否则服务器拒绝握手），跳过证书域名校验。
+     */
+    private static String fetchViaIpFallback(String host, String path) throws Exception {
+        String[] ips = {
+                "185.199.108.133",
+                "185.199.109.133",
+                "185.199.110.133",
+                "185.199.111.133"
+        };
+        Exception last = null;
+        for (String ip : ips) {
+            try {
+                URL url = new URL("https://" + ip + path);
+                HttpsURLConnection conn =
+                        (HttpsURLConnection) url.openConnection();
+                conn.setConnectTimeout(6000);
+                conn.setReadTimeout(6000);
+                conn.setRequestProperty("Host", host);
+                conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android)");
+
+                // 信任所有证书（连的是 IP，无法按域名校验）
+                TrustManager[] trustAll = {new X509TrustManager() {
+                    public void checkClientTrusted(X509Certificate[] c, String a) {
+                    }
+                    public void checkServerTrusted(X509Certificate[] c, String a) {
+                    }
+                    public X509Certificate[] getAcceptedIssuers() {
+                        return new X509Certificate[0];
+                    }
+                }};
+                SSLContext sc = SSLContext.getInstance("TLS");
+                sc.init(null, trustAll, new SecureRandom());
+                final SSLSocketFactory base = sc.getSocketFactory();
+                final String sniHost = host;
+
+                conn.setSSLSocketFactory(new SSLSocketFactory() {
+                    private void applySni(Socket socket) {
+                        if (socket instanceof SSLSocket) {
+                            SSLSocket ssl = (SSLSocket) socket;
+                            SSLParameters p = ssl.getSSLParameters();
+                            p.setServerNames(Collections.singletonList(
+                                    new SNIHostName(sniHost)));
+                            ssl.setSSLParameters(p);
+                        }
+                    }
+                    public Socket createSocket() throws java.io.IOException {
+                        SSLSocket s = (SSLSocket) base.createSocket();
+                        applySni(s);
+                        return s;
+                    }
+                    public Socket createSocket(Socket s, String h, int p,
+                                               boolean a) throws java.io.IOException {
+                        SSLSocket s2 = (SSLSocket) base.createSocket(s, h, p, a);
+                        applySni(s2);
+                        return s2;
+                    }
+                    public Socket createSocket(String h, int p)
+                            throws java.io.IOException {
+                        SSLSocket s = (SSLSocket) base.createSocket(h, p);
+                        applySni(s);
+                        return s;
+                    }
+                    public Socket createSocket(String h, int p,
+                                               InetAddress lh, int lp)
+                            throws java.io.IOException {
+                        SSLSocket s = (SSLSocket) base.createSocket(h, p, lh, lp);
+                        applySni(s);
+                        return s;
+                    }
+                    public Socket createSocket(InetAddress h, int p)
+                            throws java.io.IOException {
+                        SSLSocket s = (SSLSocket) base.createSocket(h, p);
+                        applySni(s);
+                        return s;
+                    }
+                    public Socket createSocket(InetAddress h, int p,
+                                               InetAddress lh, int lp)
+                            throws java.io.IOException {
+                        SSLSocket s = (SSLSocket) base.createSocket(h, p, lh, lp);
+                        applySni(s);
+                        return s;
+                    }
+                    public String[] getDefaultCipherSuites() {
+                        return base.getDefaultCipherSuites();
+                    }
+                    public String[] getSupportedCipherSuites() {
+                        return base.getSupportedCipherSuites();
+                    }
+                });
+
+                conn.setHostnameVerifier((h, s) -> true);
+
+                int code = conn.getResponseCode();
+                if (code == 200) {
+                    InputStream is = conn.getInputStream();
+                    BufferedReader r = new BufferedReader(
+                            new InputStreamReader(is, "UTF-8"));
+                    String v = r.readLine();
+                    r.close();
+                    conn.disconnect();
+                    if (v != null) {
+                        v = v.trim();
+                        if (v.matches("\\d+(\\.\\d+)*")) {
+                            return v;
+                        }
+                    }
+                }
+                conn.disconnect();
+                throw new Exception("HTTP " + code);
+            } catch (Exception e) {
+                last = e;
+            }
+        }
+        throw last != null ? last : new Exception("IP fallback failed");
     }
 
     /** 从 tag（如 v2.5 / 25-v2.4 / 1.3.9）提取版本号，失败返回 null */
