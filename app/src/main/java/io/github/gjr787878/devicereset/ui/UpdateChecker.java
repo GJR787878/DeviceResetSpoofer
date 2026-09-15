@@ -391,7 +391,7 @@ public class UpdateChecker {
                     conn.disconnect();
                     if (jsonKey == null) {
                         String v = sb.toString().trim();
-                        if (v.matches("\d+(\.\d+)*")) {
+                        if (v.matches("\\d+(\\.\\d+)*")) {
                             return v;
                         }
                     } else {
