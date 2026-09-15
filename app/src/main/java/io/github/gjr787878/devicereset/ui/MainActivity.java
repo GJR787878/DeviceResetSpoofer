@@ -1,11 +1,14 @@
 package io.github.gjr787878.devicereset.ui;
 
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.net.Uri;
 import android.os.Bundle;
 import android.util.TypedValue;
 import android.widget.Button;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
 
@@ -17,6 +20,10 @@ public class MainActivity extends AppCompatActivity {
     private static final String LANG_ZH = "zh";
     private static final String LANG_EN = "en";
     private static final String LANG_RU = "ru";
+
+    // 更新检测：GitHub 仓库与发布页
+    private static final String UPDATE_REPO = "GJR787878/DeviceResetSpoofer";
+    private static final String RELEASES_URL = "https://github.com/GJR787878/DeviceResetSpoofer/releases/latest";
 
     private String currentLang;
 
@@ -33,13 +40,21 @@ public class MainActivity extends AppCompatActivity {
         float borderPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 1, getResources().getDisplayMetrics());
         Button btnConfig = findViewById(R.id.btn_open_config);
         Button btnLang = findViewById(R.id.btn_switch_lang);
+        Button btnCheckUpdate = findViewById(R.id.btn_check_update);
         btnConfig.setBackground(new GlassButtonDrawable(radiusPx, borderPx, false));
         btnLang.setBackground(new GlassButtonDrawable(radiusPx, borderPx, false));
+        btnCheckUpdate.setBackground(new GlassButtonDrawable(radiusPx, borderPx, false));
 
         updateUI();
 
         btnConfig.setOnClickListener(v ->
                 startActivity(new Intent(this, ConfigActivity.class)));
+
+        // 手动点击检查更新
+        btnCheckUpdate.setOnClickListener(v -> checkUpdate(true));
+
+        // 自动检测更新（启动时后台检查，有新版本才提示）
+        checkUpdate(false);
 
         // 三语循环切换：中 -> 英 -> 俄 -> 中
         btnLang.setOnClickListener(v -> {
@@ -100,6 +115,7 @@ public class MainActivity extends AppCompatActivity {
                     "• 配置界面右上角菜单可手动重置身份");
             btnConfig.setText("📋 运行日志");
             btnLang.setText("🌐 中/EN/RU");
+            btnCheckUpdate.setText("🔄 检查更新");
         } else if (LANG_EN.equals(currentLang)) {
             tvSubtitle.setText("Auto-generate new device identity after clearing app data");
             tvUsageTitle.setText("📖 Usage");
@@ -132,6 +148,7 @@ public class MainActivity extends AppCompatActivity {
                     "• Manually reset identity from the config app's menu");
             btnConfig.setText("📋 Run Log");
             btnLang.setText("🌐 中/EN/RU");
+            btnCheckUpdate.setText("🔄 Check Update");
         } else {
             // Russian
             tvSubtitle.setText("Автоматическая генерация новой идентификации устройства после очистки данных");
@@ -165,6 +182,85 @@ public class MainActivity extends AppCompatActivity {
                     "• Ручной сброс идентичности из меню в правом верхнем углу настроек");
             btnConfig.setText("📋 Журнал");
             btnLang.setText("🌐 中/EN/RU");
+            btnCheckUpdate.setText("🔄 Проверить обновления");
         }
+    }
+
+    /**
+     * 检查更新：manual=false 为启动时自动检测（有新版本才弹窗），
+     * manual=true 为手动点击（无更新/失败时给出提示）。
+     */
+    private void checkUpdate(boolean manual) {
+        String versionName;
+        try {
+            versionName = getPackageManager()
+                    .getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Exception e) {
+            versionName = "0";
+        }
+        UpdateChecker.check(UPDATE_REPO, versionName,
+                (latest, tag, hasUpdate, error) -> {
+                    if (hasUpdate) {
+                        new AlertDialog.Builder(this)
+                                .setTitle(getUpdateTitle(latest))
+                                .setMessage(getUpdateMessage(latest))
+                                .setPositiveButton(getUpdatePositive(), (d, w) -> {
+                                    try {
+                                        startActivity(new Intent(
+                                                Intent.ACTION_VIEW,
+                                                Uri.parse(RELEASES_URL)));
+                                    } catch (Exception ignored) {
+                                    }
+                                })
+                                .setNegativeButton(getUpdateNegative(), null)
+                                .show();
+                    } else if (manual) {
+                        if (error != null) {
+                            Toast.makeText(this,
+                                    getCheckErrorText() + error,
+                                    Toast.LENGTH_SHORT).show();
+                        } else {
+                            Toast.makeText(this,
+                                    getUpToDateText(),
+                                    Toast.LENGTH_SHORT).show();
+                        }
+                    }
+                });
+    }
+
+    private String getUpdateTitle(String latest) {
+        if (LANG_ZH.equals(currentLang)) return "🔄 发现新版本 v" + latest;
+        if (LANG_EN.equals(currentLang)) return "🔄 New version v" + latest + " available";
+        return "🔄 Доступна новая версия v" + latest;
+    }
+
+    private String getUpdateMessage(String latest) {
+        if (LANG_ZH.equals(currentLang)) return "检测到新版本 v" + latest + "，是否前往下载？";
+        if (LANG_EN.equals(currentLang)) return "New version v" + latest + " detected. Download now?";
+        return "Обнаружена новая версия v" + latest + ". Скачать?";
+    }
+
+    private String getUpdatePositive() {
+        if (LANG_ZH.equals(currentLang)) return "下载";
+        if (LANG_EN.equals(currentLang)) return "Download";
+        return "Скачать";
+    }
+
+    private String getUpdateNegative() {
+        if (LANG_ZH.equals(currentLang)) return "取消";
+        if (LANG_EN.equals(currentLang)) return "Cancel";
+        return "Отмена";
+    }
+
+    private String getUpToDateText() {
+        if (LANG_ZH.equals(currentLang)) return "已是最新版本";
+        if (LANG_EN.equals(currentLang)) return "You are up to date";
+        return "У вас последняя версия";
+    }
+
+    private String getCheckErrorText() {
+        if (LANG_ZH.equals(currentLang)) return "检查更新失败：";
+        if (LANG_EN.equals(currentLang)) return "Update check failed: ";
+        return "Не удалось проверить обновления: ";
     }
 }

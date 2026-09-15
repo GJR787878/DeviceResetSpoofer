@@ -66,6 +66,18 @@
                 android:layout_marginStart="6dp"/>
         </LinearLayout>
 
+        <!-- 检查更新按钮：两个按钮下面一行 -->
+        <Button
+            android:id="@+id/btn_check_update"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="🔄 检查更新"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:textColor="#FFFFFF"
+            android:padding="12dp"
+            android:layout_marginBottom="24dp"/>
+
         <!-- 使用说明 -->
         <TextView
             android:id="@+id/tv_usage_title"

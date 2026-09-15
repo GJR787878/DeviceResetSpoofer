@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- 更新检测需要网络 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <!-- Xposed模块声明 -->
     <application
         android:allowBackup="true"
