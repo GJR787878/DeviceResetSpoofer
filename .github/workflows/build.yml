@@ -3,7 +3,12 @@ name: Build APK
 on:
   push:
     branches: [ main, master ]
+    # 自动更新 latest_version.txt 的提交不重复触发构建
+    paths-ignore: [ 'latest_version.txt' ]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -62,6 +67,22 @@ jobs:
           echo "$certs" | grep -q "d21cd192f0b2e4c0cd81b52db9b8b5e2fe62376fd87b13e374560f124ad7f843" \
             && echo "SIGNATURE OK: 与固定keystore指纹一致" \
             || { echo "SIGNATURE MISMATCH"; exit 1; }
+
+      - name: Update latest_version.txt (jsDelivr CDN 检测源)
+        run: |
+          VER=$(grep -oP 'versionName\s+"\K[^"]+' app/build.gradle)
+          echo "当前版本: $VER"
+          if [ -f latest_version.txt ] && [ "$(cat latest_version.txt)" = "$VER" ]; then
+            echo "版本文件已是最新，无需更新"
+          else
+            echo "$VER" > latest_version.txt
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add latest_version.txt
+            git commit -m "自动更新 latest_version.txt 为 $VER"
+            git push origin main
+            echo "已更新并推送 latest_version.txt"
+          fi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

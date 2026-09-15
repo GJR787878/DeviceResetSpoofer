@@ -15,6 +15,7 @@ import java.net.URL;
  * 1. API：https://api.github.com/repos/<repo>/releases/latest（标准方式）
  * 2. 页面：https://github.com/<repo>/releases/latest 的 302 重定向提取 tag
  *    （api.github.com 在部分网络（如国内 DNS）解析失败时使用）
+ * 3. CDN：jsDelivr 读取仓库根 latest_version.txt（GitHub 域名整体不可达时使用）
  */
 public class UpdateChecker {
 
@@ -58,11 +59,33 @@ public class UpdateChecker {
                 }
             }
 
-            if (tag != null && !tag.isEmpty()) {
-                latest = extractVersion(tag);
-                if (latest != null && currentVersion != null) {
-                    hasUpdate = compareVersions(latest, currentVersion) > 0;
+            // 通道二失败 → 通道三：jsDelivr CDN（国内可直连，读仓库根 latest_version.txt）
+            if (tag == null || tag.isEmpty()) {
+                String[] mirrors = {
+                        "https://cdn.jsdelivr.net/gh/",
+                        "https://fastly.jsdelivr.net/gh/",
+                        "https://gcore.jsdelivr.net/gh/"
+                };
+                for (String base : mirrors) {
+                    try {
+                        String v = fetchLatestVersionFromJsDelivr(
+                                base + repo + "@main/latest_version.txt");
+                        if (v != null) {
+                            latest = v;
+                            tag = "v" + v;
+                            error = null;
+                            break;
+                        }
+                    } catch (Exception ignored) {
+                    }
                 }
+            }
+
+            if (latest == null && tag != null && !tag.isEmpty()) {
+                latest = extractVersion(tag);
+            }
+            if (latest != null && currentVersion != null) {
+                hasUpdate = compareVersions(latest, currentVersion) > 0;
             }
 
             final String fLatest = latest;
@@ -121,6 +144,31 @@ public class UpdateChecker {
             }
             return tag;
         }
+        throw new Exception("HTTP " + code);
+    }
+
+    /** 通道三：jsDelivr CDN 读取仓库根 latest_version.txt（纯版本号，如 2.6） */
+    private static String fetchLatestVersionFromJsDelivr(String urlStr) throws Exception {
+        URL url = new URL(urlStr);
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        conn.setConnectTimeout(8000);
+        conn.setReadTimeout(8000);
+        conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android)");
+        int code = conn.getResponseCode();
+        if (code == 200) {
+            InputStream is = conn.getInputStream();
+            BufferedReader r = new BufferedReader(new InputStreamReader(is, "UTF-8"));
+            String v = r.readLine();
+            r.close();
+            conn.disconnect();
+            if (v != null) {
+                v = v.trim();
+                if (v.matches("\\d+(\\.\\d+)*")) {
+                    return v;
+                }
+            }
+        }
+        conn.disconnect();
         throw new Exception("HTTP " + code);
     }
 
