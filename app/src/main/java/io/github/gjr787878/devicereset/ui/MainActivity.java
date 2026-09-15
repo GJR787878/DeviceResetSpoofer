@@ -82,6 +82,7 @@ public class MainActivity extends AppCompatActivity {
         TextView tvWarningContent = findViewById(R.id.tv_warning_content);
         Button btnConfig = findViewById(R.id.btn_open_config);
         Button btnLang = findViewById(R.id.btn_switch_lang);
+        Button btnCheckUpdate = findViewById(R.id.btn_check_update);
 
         if (LANG_ZH.equals(currentLang)) {
             tvSubtitle.setText("清除应用数据后自动生成全新设备识别码");
