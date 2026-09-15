@@ -122,6 +122,35 @@ public class IdentityGenerator {
         id.simCountryIso = carrier[2];
         id.networkCountryIso = carrier[2];
 
+        /*
+         * IMSI：MCCMNC(即simOperator) + 9位随机序号。
+         * 预生成一次并固定，避免每次调用 getSubscriberId 都变化、
+         * 被App检测到不一致；使用 SecureRandom。
+         */
+        id.imsi = carrier[0]
+                + String.format(
+                        "%09d",
+                        RANDOM.nextInt(1000000000)
+                );
+
+        /*
+         * ICCID(SIM卡序列号)：20位数字。
+         * 同样预生成固定值，避免每次调用都变。
+         */
+        StringBuilder iccid =
+                new StringBuilder(
+                        "8986"
+                );
+
+        for (int i = 0; i < 16; i++) {
+
+            iccid.append(
+                    RANDOM.nextInt(10)
+            );
+        }
+
+        id.iccid = iccid.toString();
+
         return id;
     }
 

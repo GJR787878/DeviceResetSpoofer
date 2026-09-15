@@ -30,9 +30,10 @@ public class TelephonyHook {
                             @Override
                             protected void afterHookedMethod(MethodHookParam param) {
                                 try {
-                                    String imsi = identity.simOperator + String.format("%09d",
-                                            (int) (Math.random() * 1000000000L));
-                                    param.setResult(imsi);
+                                    // 返回预生成固定的IMSI，多次读取保持一致
+                                    if (identity.imsi != null) {
+                                        param.setResult(identity.imsi);
+                                    }
                                 } catch (Throwable t) {
                                     XposedBridge.log("[DeviceReset] getSubscriberId error: " + t.getMessage());
                                 }
@@ -46,11 +47,10 @@ public class TelephonyHook {
                             @Override
                             protected void afterHookedMethod(MethodHookParam param) {
                                 try {
-                                    StringBuilder iccid = new StringBuilder("8986");
-                                    for (int i = 0; i < 16; i++) {
-                                        iccid.append((int) (Math.random() * 10));
+                                    // 返回预生成固定的ICCID，多次读取保持一致
+                                    if (identity.iccid != null) {
+                                        param.setResult(identity.iccid);
                                     }
-                                    param.setResult(iccid.toString());
                                 } catch (Throwable t) {
                                     XposedBridge.log("[DeviceReset] getSimSerialNumber error: " + t.getMessage());
                                 }

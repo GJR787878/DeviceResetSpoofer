@@ -35,6 +35,9 @@ public class Identity {
     public String simOperatorName;
     public String simCountryIso;
     public String networkCountryIso;
+    // IMSI / SIM卡序列号(ICCID)：预生成固定值，保证多次读取一致
+    public String imsi;
+    public String iccid;
 
     public Identity() {
     }
@@ -67,6 +70,8 @@ public class Identity {
             json.put("simOperatorName", simOperatorName);
             json.put("simCountryIso", simCountryIso);
             json.put("networkCountryIso", networkCountryIso);
+            json.put("imsi", imsi);
+            json.put("iccid", iccid);
             return json.toString();
         } catch (Exception e) {
             return "{}";
@@ -102,6 +107,8 @@ public class Identity {
             id.simOperatorName = json.optString("simOperatorName", null);
             id.simCountryIso = json.optString("simCountryIso", null);
             id.networkCountryIso = json.optString("networkCountryIso", null);
+            id.imsi = json.optString("imsi", null);
+            id.iccid = json.optString("iccid", null);
             return id;
         } catch (Exception e) {
             return null;
