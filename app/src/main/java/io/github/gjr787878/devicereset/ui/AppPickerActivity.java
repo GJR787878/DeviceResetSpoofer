@@ -17,6 +17,7 @@ import android.widget.TextView;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
@@ -79,7 +80,12 @@ public class AppPickerActivity extends AppCompatActivity {
         tvCount = findViewById(R.id.tv_count);
         tvDebug = findViewById(R.id.tv_debug);
         rvApps = findViewById(R.id.rv_apps);
-        rvApps.setLayoutManager(new LinearLayoutManager(this));
+        // 平板（sw600dp+）使用双列网格，手机保持单列列表
+        if (getResources().getConfiguration().smallestScreenWidthDp >= 600) {
+            rvApps.setLayoutManager(new GridLayoutManager(this, 2));
+        } else {
+            rvApps.setLayoutManager(new LinearLayoutManager(this));
+        }
         rvApps.setNestedScrollingEnabled(false);
         adapter = new AppAdapter();
         rvApps.setAdapter(adapter);
