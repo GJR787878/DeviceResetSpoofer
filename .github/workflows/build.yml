@@ -68,7 +68,9 @@ jobs:
             && echo "SIGNATURE OK: 与固定keystore指纹一致" \
             || { echo "SIGNATURE MISMATCH"; exit 1; }
 
+      # 仅在 main 分支运行时更新版本文件；分支/PR构建跳过，避免 push main 失败导致无产物
       - name: Update latest_version.txt (jsDelivr CDN 检测源)
+        if: github.ref == 'refs/heads/main'
         run: |
           VER=$(grep -oP 'versionName\s+"\K[^"]+' app/build.gradle)
           echo "当前版本: $VER"
