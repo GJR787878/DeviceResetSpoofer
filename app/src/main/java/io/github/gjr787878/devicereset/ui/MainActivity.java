@@ -202,15 +202,7 @@ public class MainActivity extends AppCompatActivity {
         UpdateChecker.check(UPDATE_REPO, versionName,
                 (latest, tag, hasUpdate, error) -> {
                     if (hasUpdate) {
-                        new AlertDialog.Builder(this)
-                                .setTitle(getUpdateTitle(latest))
-                                .setMessage(getUpdateMessage(latest))
-                                .setPositiveButton(getUpdatePositive(), (d, w) -> {
-                                    d.dismiss();
-                                    startInAppDownload(latest, tag);
-                                })
-                                .setNegativeButton(getUpdateNegative(), null)
-                                .show();
+                        showUpdateAvailableDialog(latest, tag);
                     } else if (manual) {
                         if (error != null) {
                             Toast.makeText(this,
@@ -235,6 +227,83 @@ public class MainActivity extends AppCompatActivity {
         if (LANG_ZH.equals(currentLang)) return "检测到新版本 v" + latest + "，是否下载？";
         if (LANG_EN.equals(currentLang)) return "New version v" + latest + " detected. Download?";
         return "Обнаружена новая версия v" + latest + ". Скачать?";
+    }
+
+    /**
+     * "发现新版本"弹窗：圆角背景 + 玻璃按钮，与下载进度弹窗风格一致。
+     */
+    private void showUpdateAvailableDialog(String latest, String tag) {
+        final float density = getResources().getDisplayMetrics().density;
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        int pad = Math.round(20 * density);
+        root.setPadding(pad, Math.round(16 * density), pad, Math.round(20 * density));
+        root.setBackground(new android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT));
+
+        TextView title = new TextView(this);
+        title.setText(getUpdateTitle(latest));
+        title.setTextSize(18);
+        title.setTextColor(0xFFFFFFFF);
+        title.setTypeface(title.getTypeface(), android.graphics.Typeface.BOLD);
+        root.addView(title);
+
+        TextView msg = new TextView(this);
+        msg.setText(getUpdateMessage(latest));
+        msg.setTextSize(14);
+        msg.setTextColor(0xFFCCCCCC);
+        LinearLayout.LayoutParams msgLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        msgLp.topMargin = Math.round(10 * density);
+        root.addView(msg, msgLp);
+
+        LinearLayout btnRow = new LinearLayout(this);
+        btnRow.setOrientation(LinearLayout.HORIZONTAL);
+        btnRow.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        rowLp.topMargin = Math.round(18 * density);
+        btnRow.setLayoutParams(rowLp);
+
+        float radiusPx = android.util.TypedValue.applyDimension(
+                android.util.TypedValue.COMPLEX_UNIT_DIP, 24, getResources().getDisplayMetrics());
+        float borderPx = android.util.TypedValue.applyDimension(
+                android.util.TypedValue.COMPLEX_UNIT_DIP, 1, getResources().getDisplayMetrics());
+
+        Button cancelBtn = new Button(this);
+        cancelBtn.setText(getUpdateNegative());
+        cancelBtn.setTextSize(14);
+        cancelBtn.setBackground(new GlassButtonDrawable(radiusPx, borderPx, false));
+
+        Button downloadBtn = new Button(this);
+        downloadBtn.setText(getUpdatePositive());
+        downloadBtn.setTextSize(14);
+        downloadBtn.setBackground(new GlassButtonDrawable(radiusPx, borderPx, false));
+
+        int btnMargin = Math.round(4 * density);
+        LinearLayout.LayoutParams btnLp = new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        btnLp.leftMargin = btnMargin;
+        btnLp.rightMargin = btnMargin;
+        btnRow.addView(cancelBtn, btnLp);
+        btnRow.addView(downloadBtn, btnLp);
+        root.addView(btnRow, rowLp);
+
+        final AlertDialog dialog = new AlertDialog.Builder(this)
+                .setView(root)
+                .setCancelable(true)
+                .create();
+        dialog.show();
+
+        android.graphics.drawable.GradientDrawable dialogBg = new android.graphics.drawable.GradientDrawable();
+        dialogBg.setColor(0xFF2B2B2B);
+        dialogBg.setCornerRadius(radiusPx);
+        dialog.getWindow().setBackgroundDrawable(dialogBg);
+
+        cancelBtn.setOnClickListener(v -> dialog.dismiss());
+        downloadBtn.setOnClickListener(v -> {
+            dialog.dismiss();
+            startInAppDownload(latest, tag);
+        });
     }
 
     /**
