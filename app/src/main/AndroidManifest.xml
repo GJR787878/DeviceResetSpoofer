@@ -3,6 +3,8 @@
 
     <!-- 更新检测需要网络 -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Android 8+ 安装未知来源 APK 需要此权限 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- Xposed模块声明 -->
     <application

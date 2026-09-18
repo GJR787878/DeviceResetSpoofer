@@ -92,17 +92,18 @@ public class UpdateChecker {
 
                 // 通道二失败 → 通道三：国内可直连的 CDN / GitHub 代理（多源取最大版本）
                 if (tag == null || tag.isEmpty()) {
+                    long cb = System.currentTimeMillis();
                     String[] urls = {
-                            "https://cdn.jsdelivr.net/gh/" + repo + "@main/latest_version.txt",
-                            "https://fastly.jsdelivr.net/gh/" + repo + "@main/latest_version.txt",
-                            "https://gcore.jsdelivr.net/gh/" + repo + "@main/latest_version.txt",
-                            "https://ghfast.top/https://raw.githubusercontent.com/" + repo + "/main/latest_version.txt",
-                            "https://gh-proxy.com/https://raw.githubusercontent.com/" + repo + "/main/latest_version.txt",
-                            "https://ghproxy.net/https://raw.githubusercontent.com/" + repo + "/main/latest_version.txt",
-                            "https://github.moeyy.xyz/https://raw.githubusercontent.com/" + repo + "/main/latest_version.txt",
-                            "https://ghproxy.cc/https://raw.githubusercontent.com/" + repo + "/main/latest_version.txt",
-                            "https://gh.llkk.cc/https://raw.githubusercontent.com/" + repo + "/main/latest_version.txt",
-                            "https://mirror.ghproxy.com/https://raw.githubusercontent.com/" + repo + "/main/latest_version.txt"
+                            "https://cdn.jsdelivr.net/gh/" + repo + "@main/latest_version.txt?t=" + cb,
+                            "https://fastly.jsdelivr.net/gh/" + repo + "@main/latest_version.txt?t=" + cb,
+                            "https://gcore.jsdelivr.net/gh/" + repo + "@main/latest_version.txt?t=" + cb,
+                            "https://ghfast.top/https://raw.githubusercontent.com/" + repo + "/main/latest_version.txt?t=" + cb,
+                            "https://gh-proxy.com/https://raw.githubusercontent.com/" + repo + "/main/latest_version.txt?t=" + cb,
+                            "https://ghproxy.net/https://raw.githubusercontent.com/" + repo + "/main/latest_version.txt?t=" + cb,
+                            "https://github.moeyy.xyz/https://raw.githubusercontent.com/" + repo + "/main/latest_version.txt?t=" + cb,
+                            "https://ghproxy.cc/https://raw.githubusercontent.com/" + repo + "/main/latest_version.txt?t=" + cb,
+                            "https://gh.llkk.cc/https://raw.githubusercontent.com/" + repo + "/main/latest_version.txt?t=" + cb,
+                            "https://mirror.ghproxy.com/https://raw.githubusercontent.com/" + repo + "/main/latest_version.txt?t=" + cb
                     };
                     String best = null;
                     StringBuilder cdnErr = new StringBuilder();

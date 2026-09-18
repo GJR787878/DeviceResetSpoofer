@@ -167,7 +167,7 @@ public class AppDownloader {
                 try {
                     URL url = new URL(urlStr);
                     conn = (HttpURLConnection) url.openConnection();
-                    conn.setConnectTimeout(10000);
+                    conn.setConnectTimeout(5000);
                     conn.setReadTimeout(15000);
                     conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android)");
                     conn.setRequestProperty("Accept", "application/octet-stream");

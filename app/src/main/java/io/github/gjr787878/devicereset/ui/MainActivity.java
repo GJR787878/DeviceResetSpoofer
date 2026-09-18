@@ -258,11 +258,12 @@ public class MainActivity extends AppCompatActivity {
                 "https://mirror.ghproxy.com/",
                 "https://github.moeyy.xyz/"
         };
+        // 代理优先（国内直连 GitHub 会超时），直连兜底
         String[] urls = new String[1 + mirrors.length];
-        urls[0] = direct;
         for (int i = 0; i < mirrors.length; i++) {
-            urls[i + 1] = mirrors[i] + direct;
+            urls[i] = mirrors[i] + direct;
         }
+        urls[mirrors.length] = direct;
         return urls;
     }
 
