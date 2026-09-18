@@ -3,7 +3,6 @@ package io.github.gjr787878.devicereset.ui;
 import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.net.Uri;
 import android.os.Bundle;
 import android.util.TypedValue;
 import android.widget.Button;
@@ -24,6 +23,7 @@ public class MainActivity extends AppCompatActivity {
     // 更新检测：GitHub 仓库与发布页
     private static final String UPDATE_REPO = "GJR787878/DeviceResetSpoofer";
     private static final String RELEASES_URL = "https://github.com/GJR787878/DeviceResetSpoofer/releases/latest";
+    private static final String REPO_HOME_URL = "https://github.com/GJR787878/DeviceResetSpoofer";
 
     private String currentLang;
 
@@ -206,12 +206,8 @@ public class MainActivity extends AppCompatActivity {
                                 .setTitle(getUpdateTitle(latest))
                                 .setMessage(getUpdateMessage(latest))
                                 .setPositiveButton(getUpdatePositive(), (d, w) -> {
-                                    try {
-                                        startActivity(new Intent(
-                                                Intent.ACTION_VIEW,
-                                                Uri.parse(RELEASES_URL)));
-                                    } catch (Exception ignored) {
-                                    }
+                                    d.dismiss();
+                                    startInAppDownload(latest, tag);
                                 })
                                 .setNegativeButton(getUpdateNegative(), null)
                                 .show();
@@ -236,9 +232,38 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private String getUpdateMessage(String latest) {
-        if (LANG_ZH.equals(currentLang)) return "检测到新版本 v" + latest + "，是否前往下载？";
-        if (LANG_EN.equals(currentLang)) return "New version v" + latest + " detected. Download now?";
+        if (LANG_ZH.equals(currentLang)) return "检测到新版本 v" + latest + "，是否下载？";
+        if (LANG_EN.equals(currentLang)) return "New version v" + latest + " detected. Download?";
         return "Обнаружена новая версия v" + latest + ". Скачать?";
+    }
+
+    /**
+     * 内置下载：构建直连 + 镜像候选地址，交给 AppDownloader 下载并弹进度条。
+     */
+    private void startInAppDownload(String version, String tag) {
+        String asset = "DeviceResetSpoofer-v" + version + ".apk";
+        String[] urls = buildDownloadUrls(tag, asset);
+        AppDownloader.start(this, urls, REPO_HOME_URL,
+                "DeviceResetSpoofer-v" + version + ".apk", version, currentLang);
+    }
+
+    private String[] buildDownloadUrls(String tag, String asset) {
+        String direct = "https://github.com/" + UPDATE_REPO
+                + "/releases/download/" + tag + "/" + asset;
+        String[] mirrors = {
+                "https://ghfast.top/",
+                "https://gh-proxy.com/",
+                "https://ghproxy.net/",
+                "https://gh.llkk.cc/",
+                "https://mirror.ghproxy.com/",
+                "https://github.moeyy.xyz/"
+        };
+        String[] urls = new String[1 + mirrors.length];
+        urls[0] = direct;
+        for (int i = 0; i < mirrors.length; i++) {
+            urls[i + 1] = mirrors[i] + direct;
+        }
+        return urls;
     }
 
     private String getUpdatePositive() {

@@ -24,6 +24,16 @@
             android:name="xposedminversion"
             android:value="82" />
 
+        <!-- 内置下载 APK 安装：FileProvider 提供 content:// 访问 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="io.github.gjr787878.devicereset.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <activity
             android:name=".ui.MainActivity"
