@@ -14,8 +14,8 @@ android {
         applicationId "io.github.gjr787878.devicereset"
         minSdk 24
         targetSdk 34
-        versionCode 37
-        versionName "2.17"
+        versionCode 38
+        versionName "2.18"
     }
 
     signingConfigs {
