@@ -1,7 +1,7 @@
 # DeviceResetSpoofer
 
-> An LSPosed module that automatically generates a brand-new device identity after clearing app data
-> 清除应用数据后自动生成全新设备识别码的 LSPosed 模块
+> 清除应用数据后自动生成全新设备标识：Android ID / 广告ID / IMEI / 设备型号 / MAC / GSF / 运营商
+> Auto-generate a fresh device identity (Android ID, Ad ID, IMEI, model, MAC, GSF, carrier) after clearing app data
 
 [![Android](https://img.shields.io/badge/Android-7.0%20~%2016-green.svg)](https://www.android.com/)
 [![LSPosed](https://img.shields.io/badge/LSPosed-Required-blue.svg)](https://github.com/LSPosed/LSPosed)
