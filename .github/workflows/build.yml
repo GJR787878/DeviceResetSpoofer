@@ -5,7 +5,7 @@ on:
     branches: [ main, master ]
     # 自动更新 latest_version.txt 的提交不重复触发构建
     paths-ignore: [ 'latest_version.txt' ]
-    tags: [ 'v*' ]
+    tags: [ 'v*', '[0-9]*-*.*' ]
   workflow_dispatch:
 
 permissions:
