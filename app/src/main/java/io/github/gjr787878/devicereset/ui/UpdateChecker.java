@@ -420,12 +420,18 @@ public class UpdateChecker {
             return urlStr;
         }
     }
-    /** 从 tag（如 v2.5 / 25-v2.4 / 1.3.9）提取版本号，失败返回 null */
+    /** 从 tag（如 v2.5 / 70-3.9.8 / 1.3.9）提取版本号，失败返回 null */
     public static String extractVersion(String tag) {
         if (tag == null) return null;
+        // LSPosed 规范格式 {versionCode}-{versionName}：取 "-" 后面的 versionName 部分
+        String s = tag;
+        int dash = s.indexOf('-');
+        if (dash >= 0 && dash < s.length() - 1) {
+            s = s.substring(dash + 1);
+        }
         java.util.regex.Matcher m = java.util.regex.Pattern
                 .compile("(\\d+)(\\.\\d+)*")
-                .matcher(tag);
+                .matcher(s);
         return m.find() ? m.group() : null;
     }
 
