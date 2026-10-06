@@ -207,22 +207,25 @@ public class MainActivity extends AppCompatActivity {
         FrameLayout.LayoutParams navLp;
 
         if (isTablet) {
-            // §3.4 平板：左侧竖排悬浮胶囊，垂直居中，半屏高
+            // §3.4 平板：左侧竖排悬浮胶囊，窄宽72dp，接近全屏高，图标+文字按钮
             navBar.setOrientation(LinearLayout.VERTICAL);
-            navBar.setGravity(Gravity.CENTER_VERTICAL);
+            navBar.setGravity(Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+            navBar.setPadding(0, Math.round(24 * d), 0, Math.round(24 * d));
             navBg = new GradientDrawable(
                     GradientDrawable.Orientation.LEFT_RIGHT,
                     new int[]{0xF06A6A72, 0x882C2C2E});
             navBg.setCornerRadius(28 * d);
             navBg.setStroke(Math.round(1 * d), 0x55FFFFFF);
             navBar.setBackground(navBg);
-            // 左侧悬浮：宽约100dp，高半屏，垂直居中
+            // 左侧悬浮：宽72dp，高MATCH_PARENT上下留边
             navLp = new FrameLayout.LayoutParams(
-                    Math.round(100 * d), Math.round(300 * d));
-            navLp.gravity = Gravity.START | Gravity.CENTER_VERTICAL;
+                    Math.round(72 * d), ViewGroup.LayoutParams.MATCH_PARENT);
+            navLp.gravity = Gravity.START;
             navLp.leftMargin = Math.round(16 * d);
+            navLp.topMargin = Math.round(16 * d);
+            navLp.bottomMargin = Math.round(16 * d);
             // 内容区左侧让出导航空间
-            contentLp.leftMargin = Math.round(132 * d);
+            contentLp.leftMargin = Math.round(104 * d);
             contentLp.bottomMargin = 0;
         } else {
             // 手机：底部横排导航
@@ -250,13 +253,18 @@ public class MainActivity extends AppCompatActivity {
         navSettings = makeNavButton();
 
         if (isTablet) {
-            // 平板：竖排按钮，宽充满，高约80dp
+            // 平板：竖排图标+文字按钮，高约72dp
             LinearLayout.LayoutParams navBtnLp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, Math.round(80 * d));
-            navBtnLp.topMargin = Math.round(8 * d);
-            navBtnLp.bottomMargin = Math.round(8 * d);
-            navBtnLp.leftMargin = Math.round(8 * d);
-            navBtnLp.rightMargin = Math.round(8 * d);
+                    ViewGroup.LayoutParams.MATCH_PARENT, Math.round(72 * d));
+            navBtnLp.topMargin = Math.round(4 * d);
+            navBtnLp.bottomMargin = Math.round(4 * d);
+            navBtnLp.leftMargin = Math.round(6 * d);
+            navBtnLp.rightMargin = Math.round(6 * d);
+            // 图标在上，文字在下
+            navApps.setCompoundDrawablesWithIntrinsicBounds(0, android.R.drawable.ic_menu_view, 0, 0);
+            navSettings.setCompoundDrawablesWithIntrinsicBounds(0, android.R.drawable.ic_menu_preferences, 0, 0);
+            navApps.setGravity(Gravity.CENTER);
+            navSettings.setGravity(Gravity.CENTER);
             navBar.addView(navApps, navBtnLp);
             navBar.addView(navSettings, navBtnLp);
         } else {
@@ -1492,6 +1500,8 @@ public class MainActivity extends AppCompatActivity {
     // ===== 设置页 =====
     private View buildSettingsPage() {
         float d = getResources().getDisplayMetrics().density;
+        // §3.4 平板适配
+        boolean isTablet = getResources().getConfiguration().smallestScreenWidthDp >= 600;
         ScrollView sv = new ScrollView(this);
         LinearLayout ll = new LinearLayout(this);
         ll.setOrientation(LinearLayout.VERTICAL);
@@ -1589,21 +1599,40 @@ public class MainActivity extends AppCompatActivity {
                 t("伪装 GSF ID", "Spoof GSF ID", "Подмена GSF ID"),
                 t("伪装 运营商信息", "Spoof Carrier Info", "Подмена информации оператора")
         };
+        // §3.4 平板：按钮网格化，每行3个短胶囊并列；手机：竖排整行
+        android.widget.GridLayout grid = null;
+        if (isTablet) {
+            grid = new android.widget.GridLayout(this);
+            grid.setColumnCount(3);
+            ll.addView(grid, makeFormLp(d));
+        }
         for (int i = 0; i < 7; i++) {
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
-            row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setPadding(Math.round(16 * d), Math.round(12 * d), Math.round(16 * d), Math.round(12 * d));
+            row.setGravity(Gravity.CENTER);
+            row.setPadding(Math.round(12 * d), Math.round(14 * d), Math.round(12 * d), Math.round(14 * d));
             hookGlass[i] = new GlassButtonDrawable(24 * d, 1 * d, false);
             row.setBackground(hookGlass[i]);
             hookTv[i] = new TextView(this);
             hookTv[i].setText(hookLabels[i]);
-            hookTv[i].setTextSize(15);
+            hookTv[i].setTextSize(13);
             hookTv[i].setTextColor(COLOR_WHITE);
-            row.addView(hookTv[i], new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            hookTv[i].setGravity(Gravity.CENTER);
+            row.addView(hookTv[i], new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             final int idx = i;
             row.setOnClickListener(v -> toggleHook(idx));
-            ll.addView(row, makeFormLp(d));
+            if (isTablet && grid != null) {
+                // 平板：网格等宽，每个占1列
+                android.widget.GridLayout.LayoutParams glp = new android.widget.GridLayout.LayoutParams();
+                glp.width = 0;
+                glp.height = ViewGroup.LayoutParams.WRAP_CONTENT;
+                glp.columnSpec = android.widget.GridLayout.spec(android.widget.GridLayout.UNDEFINED, 1f);
+                glp.setMargins(Math.round(4 * d), Math.round(4 * d), Math.round(4 * d), Math.round(4 * d));
+                grid.addView(row, glp);
+            } else {
+                ll.addView(row, makeFormLp(d));
+            }
         }
         loadHookStates();
 
@@ -1612,14 +1641,26 @@ public class MainActivity extends AppCompatActivity {
         // 维护
         addSettingsSection(ll, t("维护", "Maintenance", "Обслуживание"), d);
 
-
         Button btnAbout = makeGlassBtn(t("关于", "About", "О программе"), 15);
-        ll.addView(btnAbout, makeFormLp(d));
-        btnAbout.setOnClickListener(v -> showAboutDialog());
-
         Button btnExportLog = makeGlassBtn(t("导出诊断日志", "Export Diagnostic Log", "Экспорт диагностического журнала"), 15);
-        ll.addView(btnExportLog, makeFormLp(d));
+        btnAbout.setOnClickListener(v -> showAboutDialog());
         btnExportLog.setOnClickListener(v -> exportDiagnosticLog());
+
+        if (isTablet) {
+            // §3.4 平板：维护按钮横排并列
+            LinearLayout maintainRow = new LinearLayout(this);
+            maintainRow.setOrientation(LinearLayout.HORIZONTAL);
+            LinearLayout.LayoutParams mLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            mLp.rightMargin = Math.round(6 * d);
+            maintainRow.addView(btnAbout, mLp);
+            LinearLayout.LayoutParams mLp2 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            mLp2.leftMargin = Math.round(6 * d);
+            maintainRow.addView(btnExportLog, mLp2);
+            ll.addView(maintainRow, makeFormLp(d));
+        } else {
+            ll.addView(btnAbout, makeFormLp(d));
+            ll.addView(btnExportLog, makeFormLp(d));
+        }
 
         // 说明文字（原首页内容）
         addSettingsSection(ll, t("使用方法", "Usage", "Использование"), d);
