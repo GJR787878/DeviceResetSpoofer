@@ -207,23 +207,23 @@ public class MainActivity extends AppCompatActivity {
         FrameLayout.LayoutParams navLp;
 
         if (isTablet) {
-            // §3.4 平板：左侧竖排悬浮胶囊，窄宽72dp，接近全屏高，图标+文字按钮
+            // §3.4 平板：左侧竖排悬浮胶囊，窄宽72dp，约半屏高，垂直居中，图标+文字按钮
             navBar.setOrientation(LinearLayout.VERTICAL);
-            navBar.setGravity(Gravity.TOP | Gravity.CENTER_HORIZONTAL);
-            navBar.setPadding(0, Math.round(24 * d), 0, Math.round(24 * d));
+            navBar.setGravity(Gravity.CENTER_VERTICAL | Gravity.CENTER_HORIZONTAL);
+            navBar.setPadding(0, Math.round(16 * d), 0, Math.round(16 * d));
             navBg = new GradientDrawable(
                     GradientDrawable.Orientation.LEFT_RIGHT,
                     new int[]{0xF06A6A72, 0x882C2C2E});
             navBg.setCornerRadius(28 * d);
             navBg.setStroke(Math.round(1 * d), 0x55FFFFFF);
             navBar.setBackground(navBg);
-            // 左侧悬浮：宽72dp，高MATCH_PARENT上下留边
+            // 约半屏高：屏幕高度dp的50%
+            int screenHeightDp = (int) (getResources().getDisplayMetrics().heightPixels / d);
+            int navHeight = Math.round(screenHeightDp * 0.5f * d);
             navLp = new FrameLayout.LayoutParams(
-                    Math.round(72 * d), ViewGroup.LayoutParams.MATCH_PARENT);
-            navLp.gravity = Gravity.START;
+                    Math.round(72 * d), navHeight);
+            navLp.gravity = Gravity.START | Gravity.CENTER_VERTICAL;
             navLp.leftMargin = Math.round(16 * d);
-            navLp.topMargin = Math.round(16 * d);
-            navLp.bottomMargin = Math.round(16 * d);
             // 内容区左侧让出导航空间
             contentLp.leftMargin = Math.round(104 * d);
             contentLp.bottomMargin = 0;
