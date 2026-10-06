@@ -23,7 +23,7 @@ android {
             // rootProject.file: 相对仓库根解析(keystore/目录在仓库根)
             storeFile rootProject.file(keystorePath)
             storePassword keystorePass
-            keyAlias "deviceresetx"
+            keyAlias "devicereset"
             keyPassword keystorePass
         }
     }
