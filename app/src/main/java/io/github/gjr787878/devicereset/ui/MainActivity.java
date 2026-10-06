@@ -38,8 +38,8 @@ public class MainActivity extends AppCompatActivity {
     private static final String LANG_ZH = "zh";
     private static final String LANG_EN = "en";
     private static final String LANG_RU = "ru";
-    private static final String UPDATE_REPO = "GJR787878/DeviceResetSpooferX";
-    private static final String REPO_HOME_URL = "https://github.com/GJR787878/DeviceResetSpooferX";
+    private static final String UPDATE_REPO = "GJR787878/DeviceResetSpoofer";
+    private static final String REPO_HOME_URL = "https://github.com/GJR787878/DeviceResetSpoofer";
 
     private static final int COLOR_WHITE = 0xFFFFFFFF;
     private static final int COLOR_BLUE = 0xFF0A84FF;
@@ -2314,15 +2314,15 @@ public class MainActivity extends AppCompatActivity {
                 .setTitle(t("发现新版本 v", "New version v", "Доступна новая версия v") + latest)
                 .setMessage(t("检测到新版本，是否下载？", "New version detected. Download?", "Обнаружена новая версия. Скачать?"))
                 .setPositiveButton(t("下载", "Download", "Скачать"), (d, w) -> {
-                    String asset = "DeviceResetSpooferX-v" + latest + ".apk";
+                    // CI 打包命名：DeviceResetSpoofer-${tag}.apk
+                    String asset = "DeviceResetSpoofer-" + tag + ".apk";
                     String direct = "https://github.com/" + UPDATE_REPO + "/releases/download/" + tag + "/" + asset;
                     String[] mirrors = {"https://ghfast.top/", "https://gh-proxy.com/", "https://ghproxy.net/",
                             "https://mirror.ghproxy.com/", "https://github.moeyy.xyz/"};
                     String[] urls = new String[mirrors.length + 1];
                     for (int i = 0; i < mirrors.length; i++) urls[i] = mirrors[i] + direct;
                     urls[mirrors.length] = direct;
-                    AppDownloader.start(this, urls, REPO_HOME_URL,
-                            "DeviceResetSpooferX-v" + latest + ".apk", latest, currentLang);
+                    AppDownloader.start(this, urls, REPO_HOME_URL, asset, latest, currentLang);
                 })
                 .setNegativeButton(t("取消", "Cancel", "Отмена"), null)
                 .show();
