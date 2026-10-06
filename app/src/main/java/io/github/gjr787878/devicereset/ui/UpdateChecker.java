@@ -122,7 +122,16 @@ public class UpdateChecker {
                     }
                     if (best != null) {
                         latest = best;
-                        tag = "v" + best;
+                        // CDN 只能拿到版本号，需额外从 API 获取正确的 tag（LSPosed 格式 72-4.0.0）
+                        try {
+                            tag = fetchLatestTagFromApi(repo);
+                        } catch (Exception eApi) {
+                            try {
+                                tag = fetchLatestTagFromPage(repo);
+                            } catch (Exception ePage) {
+                                tag = "v" + best;  // 兜底
+                            }
+                        }
                     } else if (cdnErr.length() > 0) {
                         errs.append("[代理:").append(cdnErr).append("]");
                     }
@@ -136,7 +145,14 @@ public class UpdateChecker {
                                 RAW_IPS, "/" + repo + "/main/latest_version.txt", null);
                         if (v != null) {
                             latest = v;
-                            tag = "v" + v;
+                            // IP 直连 raw 成功后，也尝试 IP 直连 API 获取正确 tag
+                            try {
+                                String t = fetchViaIpFallback("api.github.com",
+                                        API_IPS, "/repos/" + repo + "/releases/latest", "tag_name");
+                                tag = (t != null && !t.isEmpty()) ? t : "v" + v;
+                            } catch (Exception ex2) {
+                                tag = "v" + v;
+                            }
                         }
                     } catch (Exception ex) {
                         ipErr.append("raw:").append(ex.getMessage());
