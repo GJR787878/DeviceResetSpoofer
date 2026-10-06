@@ -2118,9 +2118,9 @@ public class MainActivity extends AppCompatActivity {
     private void showAboutDialog() {
         new AlertDialog.Builder(this)
                 .setTitle("DeviceResetSpooferX")
-                .setMessage(t("版本：3.9.5\n\n免开 LSPosed 管理器的设备伪装模块。\n\n在「应用」页添加目标 → 打开详情 →「随机」或「自定义」→ 保存（手动触发）→ 直接打开目标应用即生效。\n支持中文 / English / Русский",
-                        "Version: 3.9.5\n\nDevice spoofing module that works without opening the LSPosed Manager.\n\nAdd a target on the Apps tab -> open its detail -> Random / Customize -> Save (manual trigger) -> just reopen the app and it applies.\nSupports Chinese / English / Russian",
-                        "Версия: 3.9.5\n\nМодуль подмены устройства, работающий без открытия LSPosed Manager.\n\nДобавьте приложение на вкладке «Приложения» -> откройте детали -> «Случайно»/«Настроить» -> Сохранить (ручной запуск) -> просто откройте приложение снова, и оно применится.\nПоддерживает 中文 / English / Русский"))
+                .setMessage(t("版本：3.9.6\n\n免开 LSPosed 管理器的设备伪装模块。\n\n在「应用」页添加目标 → 打开详情 →「随机」或「自定义」→ 保存（手动触发）→ 直接打开目标应用即生效。\n支持中文 / English / Русский",
+                        "Version: 3.9.6\n\nDevice spoofing module that works without opening the LSPosed Manager.\n\nAdd a target on the Apps tab -> open its detail -> Random / Customize -> Save (manual trigger) -> just reopen the app and it applies.\nSupports Chinese / English / Russian",
+                        "Версия: 3.9.6\n\nМодуль подмены устройства, работающий без открытия LSPosed Manager.\n\nДобавьте приложение на вкладке «Приложения» -> откройте детали -> «Случайно»/«Настроить» -> Сохранить (ручной запуск) -> просто откройте приложение снова, и оно применится.\nПоддерживает 中文 / English / Русский"))
                 .setPositiveButton(t("确定", "OK", "ОК"), null)
                 .show();
     }

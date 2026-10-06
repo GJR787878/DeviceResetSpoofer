@@ -1,7 +1,7 @@
 # DeviceResetSpoofer
 
-> 清除应用数据后自动生成全新设备标识：Android ID / 广告ID / IMEI / 设备型号 / MAC / GSF / 运营商
-> Auto-generate a fresh device identity (Android ID, Ad ID, IMEI, model, MAC, GSF, carrier) after clearing app data
+> 免开 LSPosed 管理器的设备伪装模块：应用内选择目标 → 随机/自定义 → 保存即生效
+> Device spoofing module that works without opening LSPosed Manager: pick targets in-app → Random / Customize → Save, done
 
 [![Android](https://img.shields.io/badge/Android-7.0%20~%2016-green.svg)](https://www.android.com/)
 [![LSPosed](https://img.shields.io/badge/LSPosed-Required-blue.svg)](https://github.com/LSPosed/LSPosed)
@@ -14,9 +14,9 @@
 
 ## 📱 Screenshots / 界面预览
 
-| 主界面 / Main | 配置界面 / Config |
+| 主界面 / Main | 设置界面 / Settings |
 |:---:|:---:|
-| ![主界面](images/screenshot_main_en.png) | ![配置界面](images/screenshot_config_en.png) |
+| ![主界面](images/screenshot_main_en.png) | ![设置界面](images/screenshot_config_en.png) |
 
 ---
 
@@ -36,51 +36,54 @@
 
 ### Introduction
 
-An LSPosed module that **automatically generates a brand-new device identity after clearing app data** for selected applications.
+An LSPosed module that **spoofs a fresh device identity for the apps you pick, right from inside this app — no need to open LSPosed Manager again** after a one-time setup. Select a target app, tap Random / Customize, Save, and reopen the app: the new identity is applied.
 
 ### ✨ Features
 
-- **Auto identity reset**: Generate a new device identity automatically after clearing app data
-- **Multi-dimensional spoofing**: Android ID, Advertising ID, IMEI/MEID, Device model, MAC address, GSF ID, Carrier info
-- **Bilingual UI**: One-click switch between Chinese and English
-- **Manual reset**: Manually reset identity for any app at any time
-- **Independent toggles**: Each hook item can be enabled/disabled independently
-- **Sentinel detection**: Detect data clearing via a sentinel file in the private directory
+- **No more LSPosed Manager**: tick "System Framework" once in LSPosed Manager, then everything (add/remove targets, write identities) happens in this app
+- **Manual trigger**: adding a target to the list is NOT applying — tap **Random / Customize → Save** in its detail dialog to write the spoofed identity
+- **Sentinel-driven real injection**: only processes whose private dir contains a readable `.identity_sentinel` get hooked; everything else is skipped with zero overhead
+- **Applies without reboot**: after Save, just reopen the target app — no phone reboot, no LSPosed
+- **Clear-data helper**: apps that read identity only at first launch may need **Clear Data** (offered right in the dialog) to see the new values
+- **Multi-dimensional spoofing**: Android ID, Advertising ID, IMEI/MEID, IMSI/ICCID, device model, MAC address, GSF ID, serial, carrier info
+- **Independent toggles**: each hook item (Android ID / Ad ID / IMEI / Model / MAC, …) can be enabled/disabled independently
+- **Trilingual UI**: Chinese / English / Русский, switch anytime
+- **Glass UI & filters**: frosted-glass capsule style, filter System / Installed apps, long-press to remove targets
+- **Cached app list**: icon + entry caching, lazy icon loading; new installs / uninstalls are detected automatically (no manual refresh needed)
 
 ### 📋 Requirements
 
 | Item | Requirement |
 |------|-------------|
 | **Android Version** | Android 7.0 ~ Android 16 (API 24 ~ 36) |
-| **Root Access** | Required (for writing the sentinel file) |
+| **Root Access** | Required (writing the sentinel file) |
 | **Xposed Framework** | LSPosed / LSPosed_mod (recommended) |
 | **Architecture** | arm64-v8a, armeabi-v7a, x86, x86_64 |
 | **Storage** | ~6MB |
 
-> **Note**: This module is tested on LSPosed only. Other frameworks like EdXposed may have compatibility issues.
+> **Note**: Tested on LSPosed only. Other frameworks such as EdXposed may have compatibility issues.
 
 ### 📦 Installation
 
-1. Download the latest APK from the [Releases](https://github.com/GJR787878/DeviceResetSpoofer/releases) page
-2. Install the APK
-3. Open **LSPosed Manager** → **Modules** → Find **DeviceResetSpoofer** → Enable the module
-4. Tap the module → **Scope** → Check target applications
-5. **Reboot your phone** (required, otherwise the module won't work)
+1. Download the latest APK from the [Releases](https://github.com/GJR787878/DeviceResetSpoofer/releases) page and install it
+2. Open **LSPosed Manager** → **Modules** → enable **DeviceResetSpoofer**
+3. Tap the module → **Scope** → **tick "System Framework"** (global injection — this is the ONLY time you need LSPosed)
+4. **Reboot the phone once** (required for the module to take effect)
+5. From now on you never need to open LSPosed Manager again
 
 ### 🚀 Usage
 
-1. Open the **DeviceResetSpoofer** app
-2. Tap the **「Run Log」** button to enter the config interface
-3. **Check** target applications in the list
-4. (Optional) Adjust spoofing toggles at the bottom
-5. Go to **System Settings** → **Apps** → Target app → **Storage** → **Clear data**
-6. Reopen the target app to get a brand-new device identity
+1. Open the **DeviceResetSpoofer** app → **Apps** tab
+2. Tap **+ Select App** to pick target apps (filter System / Installed as needed)
+3. Tap a target row to open its detail dialog → tap **Random** or enter **Customize** → **Save** (this is the manual trigger that writes the spoofed identity)
+4. Just reopen the target app — the new identity is applied. **No reboot, no LSPosed**
+5. If the app still reports old values (identity read at first launch), open its detail dialog again → **Clear Data** → reopen the app directly (no need to launch the app via the module)
 
-> **Tip**: You can also manually reset identity from the config app's top-right menu without clearing data.
+> **Tip**: A green "已注入 ✓ / Injected ✓" status is shown once the module is enabled with global scope. The list auto-refreshes when apps are installed/uninstalled.
 
 ### 🔧 How It Works
 
-The module places a hidden sentinel file `.identity_sentinel` in the target app's private directory. Clearing app data deletes the entire private directory, including the sentinel file. On the next launch, the module detects the missing sentinel and generates a new device identity, writing a new sentinel file.
+The module hooks globally (via System Framework scope) but **costs nothing for non-targets**: it only installs hooks when the target process's private directory contains a readable `.identity_sentinel` (chmod 666, readable across UID — the root cause of earlier "hooked but not applied" issues). Identity values are stored in the module config; **Save (Random/Customize) is the manual trigger** that writes the values + sentinel. Reopening the target app then reads the spoofed values.
 
 ### 🎭 Spoofed Identifiers
 
@@ -94,38 +97,32 @@ The module places a hidden sentinel file `.identity_sentinel` in the target app'
 
 ### ❓ FAQ
 
-**Q: Identity didn't change after clearing data?**
-A: Check the following:
-1. Is the target app checked in LSPosed scope?
-2. Is the target app checked in the module config interface?
-3. Did you reboot your phone?
-4. Did you fully kill the process before reopening after clearing data?
+**Q: I added the app to the list but nothing changed?**
+A: Adding a target only manages the list. You must open its detail dialog and tap **Random / Customize → Save** to actually write the spoofed identity (manual trigger).
+
+**Q: The status still shows "not injected"?**
+A: Check that the module is enabled in LSPosed Manager and "System Framework" is ticked in its scope, then reboot once. The status is database-driven — it reflects the real LSPosed state.
+
+**Q: The app still reads the old identity after Save?**
+A: Some apps cache the identity on first launch. Use **Clear Data** in the detail dialog (partial apps require clearing data to take effect), then reopen the target app directly.
+
+**Q: Do I need to reboot every time I check a new app?**
+A: No. Save → reopen the target app is all it takes. Rebooting is needed only once after the initial module enable.
+
+**Q: New apps installed / uninstalled don't show up?**
+A: The app list is cached for speed and rebuilt automatically when the installed package set changes.
 
 **Q: App crashes when launched from LSPosed's quick-launch button?**
-A: This is caused by a conflict between LSPosed's quick-launch feature and hook injection timing.
-Solution: Don't use LSPosed's launch button — open the app directly from the desktop icon.
-If it crashes on first launch, clear the app data once and then open it.
-
-**Q: Packed/protected apps don't work?**
-A: In LSPosed scope settings, enable "Exclude resource hooks" for that app.
-Some hardened apps may require additional handling.
-
-**Q: How to manually reset identity (without clearing data)?**
-A: In the module config interface, tap the top-right menu → Manual identity reset → Select the app.
-The app will get a new identity on its next launch.
-
-**Q: Identity changes on every launch?**
-A: Normally, identity only changes after clearing data.
-If it changes on every launch, the sentinel file write failed (possibly a permission issue). Check if the app has storage permission, or try reinstalling the module.
+A: This is a conflict between LSPosed's quick-launch and hook timing. Open the app from the desktop icon instead. If it crashes on first launch, clear its data once and open it again.
 
 ### ⚠️ Warnings
 
 - For **personal privacy protection and technical testing only**
 - Some apps detect Xposed/Root traces, **account ban risk exists**
-- For packed/protected apps, enable "Exclude resource hooks" in LSPosed scope settings
+- **Clear Data wipes the target app's own data** (login, cache, etc.) — use it only when the identity doesn't refresh
 - Apps reading system properties directly at the native layer cannot be intercepted by Java hooks
 - Test on non-critical apps first
-- Troubleshooting: LSPosed → Logs → Search "DeviceReset"
+- Troubleshooting: LSPosed → Logs → Search "DeviceReset"; or use **Export Log** in Settings to share the log
 
 ### 📄 License
 
@@ -149,16 +146,20 @@ If it changes on every launch, the sentinel file write failed (possibly a permis
 
 ### 简介
 
-一个 LSPosed 模块：对选中的应用，在**清除应用数据后自动生成全新的设备识别码**。
+一个 LSPosed 模块：**安装时在 LSPosed 里勾一次「系统框架」，之后全程免开 LSPosed**——在本应用内选择目标应用，随机/自定义生成伪装值，保存后直接打开目标应用即生效。
 
 ### ✨ 功能特性
 
-- **自动换身份**：对选中的应用，清除应用数据后自动生成全新设备身份
-- **多维度伪装**：Android ID、广告 ID、IMEI/MEID、设备型号、MAC 地址、GSF ID、运营商信息
-- **中英文双语**：一键切换中英文界面
-- **手动重置**：可随时手动重置某个应用的身份
-- **独立开关**：各 Hook 项可独立开启/关闭
-- **哨兵检测**：基于私有目录哨兵文件检测数据清除，无需监听系统广播
+- **免开 LSPosed 管理器**：仅在 LSPosed 中勾选「系统框架」一次（全局注入），之后增删目标、写入伪装值全部在本应用内完成
+- **手动触发**：把应用加入目标列表 ≠ 生效；需在其详情弹窗中点击**随机/自定义 → 保存**才会写入伪装值
+- **哨兵驱动真授权**：只有目标应用私有目录存在可读哨兵文件 `.identity_sentinel` 的进程才注入 Hook，其余进程零开销跳过
+- **保存即生效，无需重启**：保存后直接重新打开目标应用即可，不用重启手机、不用开 LSPosed
+- **清数据辅助**：部分应用只在首次启动读取身份，可在弹窗内一键**清空数据**后直接打开目标应用生效
+- **多维度伪装**：Android ID、广告 ID、IMEI/MEID、IMSI/ICCID、设备型号、MAC 地址、GSF ID、序列号、运营商信息
+- **独立开关**：各 Hook 项（Android ID / 广告 ID / IMEI / 设备型号 / MAC 等）可独立开启/关闭
+- **三语界面**：中文 / English / Русский，随时切换
+- **玻璃胶囊 UI**：毛玻璃胶囊风格；支持系统/安装应用筛选；长按删除目标
+- **列表缓存加速**：图标与条目缓存、图标懒加载；自动检测新装/卸载应用，无需手动刷新
 
 ### 📋 系统要求
 
@@ -174,26 +175,25 @@ If it changes on every launch, the sentinel file write failed (possibly a permis
 
 ### 📦 安装方法
 
-1. 前往 [Releases](https://github.com/GJR787878/DeviceResetSpoofer/releases) 页面下载最新版 APK
-2. 安装 APK
-3. 打开 **LSPosed 管理器** → **模块** → 找到 **DeviceResetSpoofer** → 启用模块
-4. 点击模块进入 **作用域** 设置，勾选需要保护的目标应用
-5. **重启手机**（必须重启，否则模块不生效）
+1. 前往 [Releases](https://github.com/GJR787878/DeviceResetSpoofer/releases) 页面下载最新版 APK 并安装
+2. 打开 **LSPosed 管理器** → **模块** → 启用 **DeviceResetSpoofer**
+3. 点击模块进入**作用域**，**勾选「系统框架」**（全局注入——这是唯一一次需要打开 LSPosed）
+4. **重启手机一次**（首次启用模块必须）
+5. 此后完全不需要再打开 LSPosed 管理器
 
 ### 🚀 使用方法
 
-1. 打开 **DeviceResetSpoofer** 应用
-2. 点击 **「运行日志」** 按钮进入配置界面
-3. 在应用列表中**勾选**需要保护的目标应用
-4. （可选）在下方开关中调整需要伪装的识别码类型
-5. 前往 **系统设置** → **应用** → 目标应用 → **存储** → **清除数据**
-6. 重新打开目标应用，即获得全新的设备身份
+1. 打开 **DeviceResetSpoofer** 应用 → **Apps** 页
+2. 点击 **+ Select App** 选择目标应用（可按系统/安装应用筛选）
+3. 点击目标行打开详情弹窗 → 点击**随机**或输入**自定义** → **保存**（此即手动触发，写入伪装值）
+4. 直接重新打开目标应用即生效。**无需重启，无需 LSPosed**
+5. 若目标应用仍读到旧值（首次启动才读取身份）：再次打开其详情弹窗 → **清空数据** → 直接打开目标应用（无需通过模块启动）
 
-> **提示**：也可以在配置界面右上角菜单中选择「手动重置身份」，无需清除数据即可换身份。
+> **提示**：模块启用且全局作用域生效后显示绿色「已注入✓」状态；应用列表在系统有新装/卸载时自动更新。
 
 ### 🔧 工作原理
 
-模块在目标应用私有目录放置隐藏哨兵文件 `.identity_sentinel`。清除应用数据会删除整个私有目录，哨兵文件也被删除。下次应用启动时检测到哨兵不存在，即生成全新设备身份并写入新哨兵。
+模块通过「系统框架」作用域全局注入，但对非目标进程**零开销**：只有目标进程私有目录存在可读哨兵文件 `.identity_sentinel`（chmod 666，跨 UID 可读——正是早期"已 Hook 却未生效"的根因）才安装 Hook。伪装值存放在模块配置中，**随机/自定义 → 保存是手动触发**，写入值并落哨兵；重新打开目标应用即读取到伪装值。
 
 ### 🎭 伪装的识别码
 
@@ -207,38 +207,32 @@ If it changes on every launch, the sentinel file write failed (possibly a permis
 
 ### ❓ 常见问题
 
-**Q：清除数据后身份没变？**
-A：检查以下几点：
-1. LSPosed 作用域是否勾选了目标应用
-2. 模块配置界面是否勾选了目标应用
-3. 是否重启了手机
-4. 清除数据后是否完全杀掉进程再重新打开
+**Q：把应用加入列表了，为什么没生效？**
+A：加入目标只是管理列表。必须打开其详情弹窗，点击**随机/自定义 → 保存**才会真正写入伪装值（手动触发）。
 
-**Q：从 LSPosed 右下角启动按钮打开应用闪退？**
-A：这是 LSPosed 的快速启动功能与 Hook 注入时序冲突导致的。
-解决方法：不要用 LSPosed 的启动按钮，直接从桌面图标打开应用。
-如果首次打开闪退，先清除一次应用数据再打开即可。
+**Q：状态仍显示未注入？**
+A：检查 LSPosed 管理器中模块已启用、作用域已勾选「系统框架」，并重启一次。该状态为数据库驱动，反映 LSPosed 真实状态。
 
-**Q：加壳应用不生效？**
-A：在 LSPosed 作用域设置中，对该应用勾选「排除资源钩子」选项。
-部分加固应用可能需要额外处理。
+**Q：保存后目标应用仍读到旧值？**
+A：部分应用首次启动就缓存身份。在详情弹窗使用**清空数据**（部分应用需清空数据才能生效），然后直接打开目标应用。
 
-**Q：如何手动重置身份（不清除数据）？**
-A：在模块配置界面，点击右上角菜单 → 手动重置身份 → 选择应用。
-重置后该应用下次启动将获得全新身份。
+**Q：每次勾选新应用都要重启吗？**
+A：不用。保存 → 重新打开目标应用即可；只有首次启用模块时需要重启一次。
 
-**Q：每次启动都变身份？**
-A：正常情况下，只有清除数据后才会换身份。
-如果每次启动都变，说明哨兵文件写入失败（可能是权限问题），检查应用是否有存储权限，或尝试重新安装模块。
+**Q：新装/卸载的应用没出现在列表？**
+A：应用列表为加速做了缓存，系统应用集合变化时自动重建。
+
+**Q：从 LSPosed 快速启动按钮打开应用闪退？**
+A：这是 LSPosed 快速启动与 Hook 注入时序冲突导致。请从桌面图标直接打开应用；若首次打开闪退，清除一次该应用数据再打开。
 
 ### ⚠️ 注意事项
 
 - 本模块**仅用于个人隐私保护和技术测试**，请勿用于非法用途
 - 部分应用会检测 Xposed/Root 痕迹，**存在账号封禁风险**
-- 加壳应用请在 LSPosed 作用域设置中勾选「排除资源钩子」
+- **清空数据会清除目标应用自身数据**（登录态、缓存等），仅在身份刷新不了时使用
 - native 层直接读取系统属性的应用，Java 层 Hook 无法拦截
 - 建议先在不重要的应用上测试
-- 排查问题：LSPosed → 日志 → 搜索「DeviceReset」
+- 排查问题：LSPosed → 日志 → 搜索「DeviceReset」；或在设置页使用「导出日志」分享日志
 
 ### 📄 许可证
 
@@ -262,16 +256,20 @@ A：正常情况下，只有清除数据后才会换身份。
 
 ### Введение
 
-Модуль LSPosed, который **автоматически генерирует совершенно новую идентичность устройства после очистки данных приложения** для выбранных приложений.
+Модуль LSPosed, который **подделывает идентичность устройства для выбранных вами приложений прямо из этого приложения — больше не нужно открывать LSPosed Manager** после однократной настройки. Выберите целевое приложение, нажмите «Случайно»/«Настроить», сохраните и снова откройте приложение: новая идентичность применена.
 
 ### ✨ Возможности
 
-- **Автоматический сброс идентичности**: автоматическая генерация новой идентичности устройства после очистки данных приложения
-- **Многомерное подделывание**: Android ID, рекламный ID, IMEI/MEID, модель устройства, MAC-адрес, GSF ID, информация об операторе
-- **Двуязычный интерфейс**: переключение между китайским и английским одним нажатием
-- **Ручной сброс**: ручной сброс идентичности для любого приложения в любое время
-- **Независимые переключатели**: каждый элемент хука можно включать/отключать независимо
-- **Детекция по сторожевому файлу**: определение очистки данных через сторожевой файл в приватном каталоге
+- **Без LSPosed Manager**: отметьте «System Framework» один раз в LSPosed Manager — дальше всё (добавление/удаление целей, запись идентичности) делается в этом приложении
+- **Ручной запуск**: добавление приложения в список ≠ применение — нажмите **«Случайно»/«Настроить» → Сохранить** в диалоге деталей, чтобы записать подделанную идентичность
+- **Детекция по сторожевому файлу**: хуки ставятся только в процессы, в приватном каталоге которых есть читаемый `.identity_sentinel`; всё остальное пропускается с нулевой нагрузкой
+- **Применяется без перезагрузки**: после «Сохранить» просто откройте целевое приложение — никакой перезагрузки телефона, никакого LSPosed
+- **Помощник очистки данных**: приложениям, читающим идентичность только при первом запуске, может потребоваться **Очистить данные** (предлагается прямо в диалоге), чтобы увидеть новые значения
+- **Многомерное подделывание**: Android ID, рекламный ID, IMEI/MEID, IMSI/ICCID, модель устройства, MAC-адрес, GSF ID, серийный номер, информация об операторе
+- **Независимые переключатели**: каждый элемент хука (Android ID / Ad ID / IMEI / Model / MAC и т.д.) включается/отключается независимо
+- **Трёхъязычный интерфейс**: 中文 / English / Русский, переключение в любой момент
+- **Стеклянный UI и фильтры**: матово-стеклянный стиль-капсула, фильтр системных/установленных приложений, удаление целей долгим нажатием
+- **Кэш списка приложений**: кэш иконок и записей, ленивая загрузка иконок; новые установки/удаления обнаруживаются автоматически
 
 ### 📋 Требования
 
@@ -283,30 +281,29 @@ A：正常情况下，只有清除数据后才会换身份。
 | **Архитектура** | arm64-v8a, armeabi-v7a, x86, x86_64 |
 | **Хранилище** | ~6 МБ |
 
-> **Примечание**: Этот модуль протестирован только на LSPosed. Другие фреймворки, такие как EdXposed, могут иметь проблемы совместимости.
+> **Примечание**: Протестировано только на LSPosed. Другие фреймворки, такие как EdXposed, могут иметь проблемы совместимости.
 
 ### 📦 Установка
 
-1. Скачайте последний APK со страницы [Releases](https://github.com/GJR787878/DeviceResetSpoofer/releases)
-2. Установите APK
-3. Откройте **LSPosed Manager** → **Modules** → Найдите **DeviceResetSpoofer** → Включите модуль
-4. Нажмите на модуль → **Scope** → Отметьте целевые приложения
-5. **Перезагрузите телефон** (обязательно, иначе модуль не заработает)
+1. Скачайте и установите последний APK со страницы [Releases](https://github.com/GJR787878/DeviceResetSpoofer/releases)
+2. Откройте **LSPosed Manager** → **Modules** → включите **DeviceResetSpoofer**
+3. Нажмите на модуль → **Scope** → **отметьте «System Framework»** (глобальная инъекция — это единственный раз, когда нужен LSPosed)
+4. **Перезагрузите телефон один раз** (обязательно для активации модуля)
+5. Дальше LSPosed Manager больше никогда не нужен
 
 ### 🚀 Использование
 
-1. Откройте приложение **DeviceResetSpoofer**
-2. Нажмите кнопку **「Run Log」**, чтобы войти в интерфейс конфигурации
-3. **Отметьте** целевые приложения в списке
-4. (Необязательно) Настройте переключатели подделывания внизу
-5. Перейдите в **System Settings** → **Apps** → Целевое приложение → **Storage** → **Clear data**
-6. Снова откройте целевое приложение, чтобы получить совершенно новую идентичность устройства
+1. Откройте приложение **DeviceResetSpoofer** → вкладка **Apps**
+2. Нажмите **+ Select App**, чтобы выбрать целевые приложения (при необходимости фильтр Системные/Установленные)
+3. Нажмите на строку цели, чтобы открыть диалог деталей → нажмите **«Случайно»** или введите **«Настроить»** → **Сохранить** (это ручной запуск, записывающий подделанную идентичность)
+4. Просто снова откройте целевое приложение — новая идентичность применена. **Без перезагрузки, без LSPosed**
+5. Если приложение по-прежнему показывает старые значения (идентичность читается при первом запуске): снова откройте его диалог деталей → **Очистить данные** → откройте приложение напрямую
 
-> **Совет**: Вы также можете вручную сбросить идентичность из меню в правом верхнем углу приложения конфигурации без очистки данных.
+> **Совет**: Зелёный статус «已注入✓ / Injected✓» появляется, когда модуль включён с глобальной областью действия. Список автоматически обновляется при установке/удалении приложений.
 
 ### 🔧 Как это работает
 
-Модуль размещает скрытый сторожевой файл `.identity_sentinel` в приватном каталоге целевого приложения. Очистка данных приложения удаляет весь приватный каталог, включая сторожевой файл. При следующем запуске модуль обнаруживает отсутствие сторожевого файла и генерирует новую идентичность устройства, записывая новый сторожевой файл.
+Модуль внедряется глобально (через область System Framework), но **ничего не стоит для нецелевых процессов**: хуки ставятся только тогда, когда в приватном каталоге целевого процесса есть читаемый `.identity_sentinel` (chmod 666, читаемый между UID — корень проблемы ранних версий «хук есть, а применения нет»). Значения идентичности хранятся в конфигурации модуля; **«Случайно»/«Настроить» → «Сохранить» — это ручной запуск**, который записывает значения и сторожевой файл. При повторном открытии целевое приложение читает подделанные значения.
 
 ### 🎭 Подделываемые идентификаторы
 
@@ -320,38 +317,32 @@ A：正常情况下，只有清除数据后才会换身份。
 
 ### ❓ Часто задаваемые вопросы
 
-**Q: Идентичность не изменилась после очистки данных?**
-A: Проверьте следующее:
-1. Отмечено ли целевое приложение в области действия LSPosed?
-2. Отмечено ли целевое приложение в интерфейсе конфигурации модуля?
-3. Перезагружали ли вы телефон?
-4. Полностью ли вы завершили процесс перед повторным открытием после очистки данных?
+**Q: Я добавил приложение в список, но ничего не изменилось?**
+A: Добавление цели только управляет списком. Нужно открыть её диалог деталей и нажать **«Случайно»/«Настроить» → «Сохранить»**, чтобы фактически записать подделанную идентичность (ручной запуск).
+
+**Q: Статус всё ещё показывает «не внедрено»?**
+A: Проверьте, что модуль включён в LSPosed Manager и в его области действия отмечен «System Framework», затем перезагрузитесь один раз. Статус управляется базой данных и отражает реальное состояние LSPosed.
+
+**Q: После «Сохранить» приложение всё ещё читает старые значения?**
+A: Некоторые приложения кэшируют идентичность при первом запуске. Используйте **«Очистить данные»** в диалоге деталей (частичным приложениям требуется очистка данных), затем снова откройте целевое приложение.
+
+**Q: Нужно ли перезагружаться при каждом выборе нового приложения?**
+A: Нет. «Сохранить» → снова открыть целевое приложение — этого достаточно. Перезагрузка нужна только один раз после первоначального включения модуля.
+
+**Q: Новые установленные/удалённые приложения не появляются?**
+A: Список приложений кэшируется для скорости и автоматически перестраивается при изменении набора установленных пакетов.
 
 **Q: Приложение вылетает при запуске через кнопку быстрого запуска LSPosed?**
-A: Это вызвано конфликтом между функцией быстрого запуска LSPosed и временем инъекции хука.
-Решение: не используйте кнопку запуска LSPosed — открывайте приложение напрямую с значка на рабочем столе.
-Если при первом запуске происходит вылет, один раз очистите данные приложения, а затем откройте его.
-
-**Q: Защищённые/упакованные приложения не работают?**
-A: В настройках области действия LSPosed включите «Exclude resource hooks» для этого приложения.
-Некоторые защищённые приложения могут потребовать дополнительной обработки.
-
-**Q: Как вручную сбросить идентичность (без очистки данных)?**
-A: В интерфейсе конфигурации модуля нажмите меню в правом верхнем углу → Ручной сброс идентичности → Выберите приложение.
-Приложение получит новую идентичность при следующем запуске.
-
-**Q: Идентичность меняется при каждом запуске?**
-A: Обычно идентичность меняется только после очистки данных.
-Если она меняется при каждом запуске, запись сторожевого файла не удалась (возможно, проблема с правами). Проверьте, есть ли у приложения права на хранилище, или попробуйте переустановить модуль.
+A: Это конфликт между быстрым запуском LSPosed и временем инъекции хука. Открывайте приложение с рабочего стола. Если при первом запуске происходит вылет, один раз очистите данные приложения и откройте снова.
 
 ### ⚠️ Предупреждения
 
 - Только для **защиты личной конфиденциальности и технического тестирования**
 - Некоторые приложения обнаруживают следы Xposed/Root, **существует риск блокировки аккаунта**
-- Для защищённых/упакованных приложений включите «Exclude resource hooks» в настройках области действия LSPosed
+- **«Очистить данные» удаляет собственные данные целевого приложения** (вход, кэш и т.д.) — используйте только когда идентичность не обновляется
 - Приложения, читающие системные свойства напрямую на нативном уровне, не могут быть перехвачены Java-хуками
 - Сначала тестируйте на некритичных приложениях
-- Устранение неполадок: LSPosed → Logs → Поиск «DeviceReset»
+- Устранение неполадок: LSPosed → Logs → Поиск «DeviceReset»; или «Экспорт журнала» в настройках
 
 ### 📄 Лицензия
 
@@ -364,4 +355,3 @@ A: Обычно идентичность меняется только посл�
 If this project helps you, please give it a Star ⭐
 
 For issues or suggestions, please submit an [Issue](https://github.com/GJR787878/DeviceResetSpoofer/issues).
-
