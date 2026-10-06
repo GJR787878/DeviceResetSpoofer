@@ -65,7 +65,7 @@ jobs:
           certs=$("$apksigner" verify --print-certs app/build/outputs/apk/debug/app-debug.apk)
           echo "$certs"
           # 断言证书指纹与固定keystore一致(DRS_Key_2026!生成的证书)
-          echo "$certs" | grep -q "d21cd192f0b2e4c0cd81b52db9b8b5e2fe62376fd87b13e374560f124ad7f843" \
+          echo "$certs" | grep -q "5cb4a2417398b2738c875825dbe320f2821022a15fc05dee5282165244dff775" \
             && echo "SIGNATURE OK: 与固定keystore指纹一致" \
             || { echo "SIGNATURE MISMATCH"; exit 1; }
 

@@ -1,10 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- 更新检测需要网络 -->
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Android 8+ 安装未知来源 APK 需要此权限 -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Android 11+ 包可见性限制：读取全部已安装应用的图标/名称、全部应用选择器需要（§6 #40） -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
 
     <!-- Xposed模块声明 -->
     <application
@@ -25,6 +29,11 @@
         <meta-data
             android:name="xposedminversion"
             android:value="82" />
+        <!-- 建议作用域：LSPosed Manager 安装/启用模块时自动预勾选「系统框架」(system)，
+             实现全局注入 + 应用内 targets.txt 过滤，免手动勾选目标应用 -->
+        <meta-data
+            android:name="xposedscope"
+            android:resource="@array/xposed_scope" />
 
         <!-- 内置下载 APK 安装：FileProvider 提供 content:// 访问 -->
         <provider
@@ -36,6 +45,13 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+
+        <!-- LSPosed libxposed:service 接入：框架通过该 provider 向模块 UI 进程注入
+             IXposedService binder，实现应用内动态请求/移除作用域（免开 LSPosed 管理器） -->
+        <provider
+            android:name="io.github.libxposed.service.XposedProvider"
+            android:authorities="io.github.gjr787878.devicereset.XposedService"
+            android:exported="true" />
 
         <activity
             android:name=".ui.MainActivity"

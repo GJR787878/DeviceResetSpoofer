@@ -262,4 +262,40 @@ public class IdentityGenerator {
         }
         return sb.toString();
     }
+
+    /**
+     * 补齐缺失字段：旧版本身份文件可能缺少 IMSI/ICCID 等字段（导致编辑页默认空）。
+     * 只补 null 的字段，保留用户已填写的值。
+     */
+    public static void fillMissing(Identity id) {
+        if (id == null) return;
+        Identity fresh = generateRandom();
+        if (id.androidId == null) id.androidId = fresh.androidId;
+        if (id.advertisingId == null) id.advertisingId = fresh.advertisingId;
+        if (id.appSetId == null) id.appSetId = fresh.appSetId;
+        if (id.gsfId == null) id.gsfId = fresh.gsfId;
+        if (id.imei == null) id.imei = fresh.imei;
+        if (id.meid == null) id.meid = fresh.meid;
+        if (id.serial == null) id.serial = fresh.serial;
+        if (id.macAddress == null) id.macAddress = fresh.macAddress;
+        if (id.brand == null) id.brand = fresh.brand;
+        if (id.model == null) id.model = fresh.model;
+        if (id.manufacturer == null) id.manufacturer = fresh.manufacturer;
+        if (id.device == null) id.device = fresh.device;
+        if (id.product == null) id.product = fresh.product;
+        if (id.hardware == null) id.hardware = fresh.hardware;
+        if (id.fingerprint == null) id.fingerprint = fresh.fingerprint;
+        if (id.bootloader == null) id.bootloader = fresh.bootloader;
+        if (id.radioVersion == null) id.radioVersion = fresh.radioVersion;
+        if (id.buildId == null) id.buildId = fresh.buildId;
+        if (id.buildTime == null) id.buildTime = fresh.buildTime;
+        if (id.networkOperator == null) id.networkOperator = fresh.networkOperator;
+        if (id.networkOperatorName == null) id.networkOperatorName = fresh.networkOperatorName;
+        if (id.simOperator == null) id.simOperator = fresh.simOperator;
+        if (id.simOperatorName == null) id.simOperatorName = fresh.simOperatorName;
+        if (id.simCountryIso == null) id.simCountryIso = fresh.simCountryIso;
+        if (id.networkCountryIso == null) id.networkCountryIso = fresh.networkCountryIso;
+        if (id.imsi == null) id.imsi = fresh.imsi;
+        if (id.iccid == null) id.iccid = fresh.iccid;
+    }
 }

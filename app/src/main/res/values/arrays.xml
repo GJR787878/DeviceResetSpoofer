@@ -1,6 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 默认作用域为空，用户在LSPosed管理器中手动勾选目标应用 -->
+    <!-- 建议作用域：LSPosed/EdXposed Manager 安装或启用模块时自动预勾选。
+         system = 系统框架（zygote 全局注入，配合 MainHook 的 targets.txt 过滤实现
+         应用内选目标即生效）；android = Android 系统条目（仅系统进程，无害）；
+         模块自身包名 = libxposed:service 的 XposedProvider 依赖模块自身进程被注入
+         才能建立 service 连接（getScope/requestScope 可用，主页作用域状态真实显示）。
+         全局注入 + 应用内过滤后，无需再在 LSPosed 中手动勾选任何目标应用。 -->
     <string-array name="xposed_scope">
+        <item>system</item>
+        <item>android</item>
+        <item>io.github.gjr787878.devicereset</item>
     </string-array>
 </resources>

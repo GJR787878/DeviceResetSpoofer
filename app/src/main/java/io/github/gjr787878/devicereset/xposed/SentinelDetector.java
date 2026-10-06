@@ -106,72 +106,16 @@ public class SentinelDetector {
                 }
             }
 
-            // 内部、外部都没有 → 生成全新身份（自动触发，全链路记录）
-            Identity newIdentity = IdentityGenerator.generateRandom();
-            String jsonStr = newIdentity.toJson();
-            XposedBridge.log("[DeviceReset] ===AUTO-GENERATE START=== androidId=" + newIdentity.androidId
-                    + " model=" + newIdentity.model + " brand=" + newIdentity.brand);
-
-            if (!filesDir.exists()) {
-                boolean mk = filesDir.mkdirs();
-                XposedBridge.log("[DeviceReset] AUTO-GENERATE mkdirs internal=" + filesDir.getAbsolutePath() + " result=" + mk);
-            } else {
-                XposedBridge.log("[DeviceReset] AUTO-GENERATE internal dir already exists: " + filesDir.getAbsolutePath());
-            }
-
-            // 用FileOutputStream写入内部目录（比Files.write更兼容）
-            boolean internalOk = writeFile(sentinel, jsonStr);
-            XposedBridge.log("[DeviceReset] AUTO-GENERATE internal write " + (internalOk ? "成功" : "失败")
-                    + " path=" + sentinel.getAbsolutePath()
-                    + " exists=" + sentinel.exists() + " size=" + (sentinel.exists() ? sentinel.length() : -1));
-
-            // 同时写入外部存储备份（UI端可读）和运行时值
-            if (externalDirPath != null) {
-                try {
-                    File extDir = new File(externalDirPath);
-                    if (!extDir.exists()) {
-                        boolean emk = extDir.mkdirs();
-                        XposedBridge.log("[DeviceReset] AUTO-GENERATE mkdirs external=" + externalDirPath + " result=" + emk);
-                    }
-                } catch (Throwable e) {
-                    XposedBridge.log("[DeviceReset] AUTO-GENERATE external mkdirs异常: " + e.getMessage());
-                }
-                boolean extOk = writeBackup(externalDirPath, jsonStr);
-                File extSentinel = new File(externalDirPath, SENTINEL_FILE);
-                XposedBridge.log("[DeviceReset] AUTO-GENERATE external backup write " + (extOk ? "成功" : "失败")
-                        + " path=" + extSentinel.getAbsolutePath()
-                        + " exists=" + extSentinel.exists() + " size=" + (extSentinel.exists() ? extSentinel.length() : -1));
-                boolean rtOk = writeRuntime(externalDirPath, jsonStr);
-                File rtFile = new File(externalDirPath, RUNTIME_FILE);
-                XposedBridge.log("[DeviceReset] AUTO-GENERATE runtime write " + (rtOk ? "成功" : "失败")
-                        + " path=" + rtFile.getAbsolutePath()
-                        + " exists=" + rtFile.exists() + " size=" + (rtFile.exists() ? rtFile.length() : -1));
-            } else {
-                XposedBridge.log("[DeviceReset] AUTO-GENERATE externalDirPath为null，跳过外部备份和runtime写入");
-            }
-
-            // 尝试设置全局可读
-            try {
-                Process chmod = Runtime.getRuntime().exec(new String[]{"chmod", "666", sentinel.getAbsolutePath()});
-                int code = chmod.waitFor();
-                XposedBridge.log("[DeviceReset] AUTO-GENERATE chmod 666 exit=" + code + " path=" + sentinel.getAbsolutePath());
-            } catch (Throwable e) {
-                XposedBridge.log("[DeviceReset] AUTO-GENERATE chmod异常: " + e.getMessage());
-            }
-
-            cachedIdentity = newIdentity;
-            checked = true;
-            XposedBridge.log("[DeviceReset] ===AUTO-GENERATE DONE=== androidId=" + newIdentity.androidId
-                    + " internalExists=" + sentinel.exists()
-                    + (externalDirPath != null ? " externalExists=" + new File(externalDirPath, SENTINEL_FILE).exists() : ""));
-            return newIdentity;
+            // 内部、外部都没有身份 → 返回 null，不自动生成、不伪装。
+            // 身份必须由用户在模块内手动触发（点「随机」/「保存」）写入模块配置后才会生效；
+            // 旧版「清数据自动生成新身份」行为已改为手动触发，未设置的应用保持真实值。
+            XposedBridge.log("[DeviceReset] 未找到任何身份（内部/外部哨兵均不存在），跳过伪装，保持真实值");
+            return null;
         } catch (Throwable t) {
             XposedBridge.log("[DeviceReset] SentinelDetector异常: " + t.getMessage());
-            if (cachedIdentity == null) {
-                cachedIdentity = IdentityGenerator.generateRandom();
-            }
+            // 异常时不自动生成身份，保持真实值（身份必须手动触发）
             checked = true;
-            return cachedIdentity;
+            return null;
         }
     }
 
@@ -237,14 +181,27 @@ public class SentinelDetector {
         }
     }
 
+    /**
+     * 重置身份：root 删除目标应用的内部+外部哨兵（含运行时文件）。
+     * 必须用 root：第三方应用无权删除其他应用私有目录文件（createPackageContext 方式无效）；
+     * 且必须同时删外部哨兵，否则 MainHook 会从外部备份恢复旧伪装值（重置形同虚设）。
+     */
     public static boolean resetIdentity(String packageName, Context context) {
         try {
-            Context targetContext = context.createPackageContext(packageName,
-                    Context.MODE_PRIVATE | Context.CONTEXT_IGNORE_SECURITY);
-            File sentinel = new File(targetContext.getFilesDir(), SENTINEL_FILE);
-            if (sentinel.exists()) {
-                sentinel.delete();
+            String[] paths = {
+                    "/data/user/0/" + packageName + "/files/.identity_sentinel",
+                    "/data/user/0/" + packageName + "/files/.identity_runtime",
+                    "/sdcard/Android/data/" + packageName + "/files/.identity_sentinel",
+                    "/sdcard/Android/data/" + packageName + "/files/.identity_runtime"
+            };
+            Process su = Runtime.getRuntime().exec("su");
+            java.io.DataOutputStream os = new java.io.DataOutputStream(su.getOutputStream());
+            for (String p : paths) {
+                os.writeBytes("rm -f '" + p + "' 2>/dev/null\n");
             }
+            os.writeBytes("exit\n");
+            os.flush();
+            su.waitFor();
             cachedIdentity = null;
             checked = false;
             return true;
