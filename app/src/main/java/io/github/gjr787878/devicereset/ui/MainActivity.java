@@ -191,40 +191,83 @@ public class MainActivity extends AppCompatActivity {
 
     private void buildRootUI() {
         float d = getResources().getDisplayMetrics().density;
+        // §3.4 平板适配：smallestScreenWidthDp >= 600 视为平板
+        boolean isTablet = getResources().getConfiguration().smallestScreenWidthDp >= 600;
+
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(0xFF000000);
 
         contentFrame = new FrameLayout(this);
         FrameLayout.LayoutParams contentLp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
-        contentLp.bottomMargin = Math.round(80 * d);
-        root.addView(contentFrame, contentLp);
 
+        // §3.6.1 导航栏磨砂渐变
+        GradientDrawable navBg;
         LinearLayout navBar = new LinearLayout(this);
-        navBar.setOrientation(LinearLayout.HORIZONTAL);
-        navBar.setGravity(Gravity.CENTER);
-        GradientDrawable navBg = new GradientDrawable(
-                GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{0xF06A6A72, 0x882C2C2E});
-        navBg.setCornerRadius(28 * d);
-        navBg.setStroke(Math.round(1 * d), 0x55FFFFFF);
-        navBar.setBackground(navBg);
-        FrameLayout.LayoutParams navLp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, Math.round(64 * d));
-        navLp.gravity = Gravity.BOTTOM;
-        navLp.leftMargin = Math.round(16 * d);
-        navLp.rightMargin = Math.round(16 * d);
-        navLp.bottomMargin = Math.round(16 * d);
+        FrameLayout.LayoutParams navLp;
+
+        if (isTablet) {
+            // §3.4 平板：左侧竖排悬浮胶囊，垂直居中，半屏高
+            navBar.setOrientation(LinearLayout.VERTICAL);
+            navBar.setGravity(Gravity.CENTER_VERTICAL);
+            navBg = new GradientDrawable(
+                    GradientDrawable.Orientation.LEFT_RIGHT,
+                    new int[]{0xF06A6A72, 0x882C2C2E});
+            navBg.setCornerRadius(28 * d);
+            navBg.setStroke(Math.round(1 * d), 0x55FFFFFF);
+            navBar.setBackground(navBg);
+            // 左侧悬浮：宽约100dp，高半屏，垂直居中
+            navLp = new FrameLayout.LayoutParams(
+                    Math.round(100 * d), Math.round(300 * d));
+            navLp.gravity = Gravity.START | Gravity.CENTER_VERTICAL;
+            navLp.leftMargin = Math.round(16 * d);
+            // 内容区左侧让出导航空间
+            contentLp.leftMargin = Math.round(132 * d);
+            contentLp.bottomMargin = 0;
+        } else {
+            // 手机：底部横排导航
+            navBar.setOrientation(LinearLayout.HORIZONTAL);
+            navBar.setGravity(Gravity.CENTER);
+            navBg = new GradientDrawable(
+                    GradientDrawable.Orientation.TOP_BOTTOM,
+                    new int[]{0xF06A6A72, 0x882C2C2E});
+            navBg.setCornerRadius(28 * d);
+            navBg.setStroke(Math.round(1 * d), 0x55FFFFFF);
+            navBar.setBackground(navBg);
+            navLp = new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, Math.round(64 * d));
+            navLp.gravity = Gravity.BOTTOM;
+            navLp.leftMargin = Math.round(16 * d);
+            navLp.rightMargin = Math.round(16 * d);
+            navLp.bottomMargin = Math.round(16 * d);
+            contentLp.bottomMargin = Math.round(80 * d);
+        }
+
+        root.addView(contentFrame, contentLp);
         root.addView(navBar, navLp);
 
         navApps = makeNavButton();
         navSettings = makeNavButton();
-        LinearLayout.LayoutParams navBtnLp = new LinearLayout.LayoutParams(
-                0, Math.round(48 * d), 1f);
-        navBtnLp.leftMargin = Math.round(4 * d);
-        navBtnLp.rightMargin = Math.round(4 * d);
-        navBar.addView(navApps, navBtnLp);
-        navBar.addView(navSettings, navBtnLp);
+
+        if (isTablet) {
+            // 平板：竖排按钮，宽充满，高约80dp
+            LinearLayout.LayoutParams navBtnLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, Math.round(80 * d));
+            navBtnLp.topMargin = Math.round(8 * d);
+            navBtnLp.bottomMargin = Math.round(8 * d);
+            navBtnLp.leftMargin = Math.round(8 * d);
+            navBtnLp.rightMargin = Math.round(8 * d);
+            navBar.addView(navApps, navBtnLp);
+            navBar.addView(navSettings, navBtnLp);
+        } else {
+            // 手机：横排按钮
+            LinearLayout.LayoutParams navBtnLp = new LinearLayout.LayoutParams(
+                    0, Math.round(48 * d), 1f);
+            navBtnLp.leftMargin = Math.round(4 * d);
+            navBtnLp.rightMargin = Math.round(4 * d);
+            navBar.addView(navApps, navBtnLp);
+            navBar.addView(navSettings, navBtnLp);
+        }
 
         setContentView(root);
         switchTab(0);
