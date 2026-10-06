@@ -1,0 +1,8 @@
+# 建议作用域 / Suggested Scope
+# 本模块采用应用内动态选择目标应用的方式，无需在 LSPosed 管理器中预先勾选固定作用域。
+# 启用模块后，在模块应用内选择需要伪装的目标应用即可。
+# This module uses in-app dynamic target selection — no need to pre-check a fixed scope in LSPosed Manager.
+# After enabling the module, select target apps inside the module app.
+
+# 如需手动指定，可勾选需要伪装的应用包名。
+# For manual configuration, check the package names of apps you want to spoof.
