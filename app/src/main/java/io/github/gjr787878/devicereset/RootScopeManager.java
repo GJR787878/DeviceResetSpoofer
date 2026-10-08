@@ -190,6 +190,41 @@ public final class RootScopeManager {
         return ok;
     }
 
+    // ============================== 表结构检测 ==============================
+
+    /**
+     * 检测 LSPosed 数据库表结构版本。
+     * 返回：
+     *   2 = 新版 Vector/LSPosed: modules(mid, ...) + scope(mid, app_pkg_name, user_id)
+     *   1 = 旧版/中间版: modules(module_pkg_name, apk_path) + modules_state + scope(module_pkg_name, ...)
+     *   0 = 未知/无 scope 表
+     */
+    private int detectSchema(SQLiteDatabase sql) {
+        try (Cursor c = sql.rawQuery(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('modules','modules_state','scope')",
+                null)) {
+            boolean hasModules = false, hasModulesState = false, hasScope = false;
+            while (c.moveToNext()) {
+                String n = c.getString(0);
+                if ("modules".equals(n)) hasModules = true;
+                if ("modules_state".equals(n)) hasModulesState = true;
+                if ("scope".equals(n)) hasScope = true;
+            }
+            if (!hasScope) return 0;
+            // 检测 modules 表是否有 mid 列
+            if (hasModules) {
+                try (Cursor cc = sql.rawQuery("PRAGMA table_info(modules)", null)) {
+                    boolean hasMid = false;
+                    while (cc.moveToNext()) {
+                        if ("mid".equals(cc.getString(1))) { hasMid = true; break; }
+                    }
+                    if (hasMid) return 2;
+                }
+            }
+            return 1;
+        }
+    }
+
     // ============================== 读取作用域 ==============================
 
     /** 读取本模块当前作用域包名集合。失败返回 null。 */
@@ -201,20 +236,30 @@ public final class RootScopeManager {
         Set<String> scope = new LinkedHashSet<>();
         SQLiteDatabase sql = null;
         try {
-            // 打开前删除残留 WAL/SHM，强制 checkpoint 到主库（避免 WAL 不完整导致打开失败）
             runRoot("rm -f '" + SWAL + "' '" + SSHM + "' 2>/dev/null");
             sql = SQLiteDatabase.openDatabase(SDB, null, SQLiteDatabase.OPEN_READWRITE);
-            Long mid = getModuleMid(sql);
-            Log.i(TAG, "readScope: mid=" + mid);
-            if (mid == null) {
-                // 模块未在管理器启用：返回空集合（非 null），调用方据此走 rootMode 并在 syncScope 时自动启用
-                Log.i(TAG, "readScope: module not in modules table, returning empty set (rootMode will auto-enable)");
-                return scope;
-            }
-            try (Cursor c = sql.rawQuery(
-                    "SELECT app_pkg_name FROM scope WHERE mid=? AND user_id=?",
-                    new String[]{String.valueOf(mid), String.valueOf(USER_ID)})) {
-                while (c.moveToNext()) scope.add(c.getString(0));
+            int schema = detectSchema(sql);
+            Log.i(TAG, "readScope: schema=" + schema);
+            if (schema == 2) {
+                // 新版：modules(mid) + scope(mid, ...)
+                Long mid = getModuleMidV2(sql);
+                Log.i(TAG, "readScope: mid=" + mid);
+                if (mid == null) return scope; // 模块未启用，返回空集合（rootMode 自动启用）
+                try (Cursor c = sql.rawQuery(
+                        "SELECT app_pkg_name FROM scope WHERE mid=? AND user_id=?",
+                        new String[]{String.valueOf(mid), String.valueOf(USER_ID)})) {
+                    while (c.moveToNext()) scope.add(c.getString(0));
+                }
+            } else if (schema == 1) {
+                // 旧版：modules(module_pkg_name) + modules_state + scope(module_pkg_name, ...)
+                try (Cursor c = sql.rawQuery(
+                        "SELECT app_pkg_name FROM scope WHERE module_pkg_name=? AND user_id=?",
+                        new String[]{MODULE_PKG, String.valueOf(USER_ID)})) {
+                    while (c.moveToNext()) scope.add(c.getString(0));
+                }
+            } else {
+                Log.e(TAG, "readScope: unknown schema");
+                return null;
             }
             Log.i(TAG, "readScope: found " + scope.size() + " scope entries");
         } catch (Throwable t) {
@@ -227,7 +272,7 @@ public final class RootScopeManager {
         return scope;
     }
 
-    private Long getModuleMid(SQLiteDatabase sql) {
+    private Long getModuleMidV2(SQLiteDatabase sql) {
         try (Cursor c = sql.rawQuery(
                 "SELECT mid FROM modules WHERE module_pkg_name=?",
                 new String[]{MODULE_PKG})) {
@@ -240,47 +285,64 @@ public final class RootScopeManager {
 
     /**
      * 把本模块作用域全量同步为 {@code targetPkgs}，并确保模块已启用；随后重启守护进程。
+     * 兼容新版(mid schema)和旧版(module_pkg_name schema)两种表结构。
      */
     public boolean syncScope(Set<String> targetPkgs) {
         String db = findDbPath();
         if (db == null) { Log.e(TAG, "db not found"); return false; }
 
-        // 1) 先停守护进程，避免并发写 / WAL 竞争
         killDaemon();
-
-        // 2) 拷出到私有暂存目录
         if (!stageFromDevice(db)) { restartDaemon(); return false; }
 
-        // 3) 应用内 SQLite 修改（新 mid schema）
         boolean edited;
         SQLiteDatabase sql = null;
         try {
             sql = SQLiteDatabase.openDatabase(SDB, null, SQLiteDatabase.OPEN_READWRITE);
+            int schema = detectSchema(sql);
+            Log.i(TAG, "syncScope: schema=" + schema + ", targets=" + targetPkgs.size());
             sql.beginTransaction();
             try {
-                Long mid = getModuleMid(sql);
-                if (mid == null) {
-                    // 模块记录缺失（从未在管理器启用）：补一条 enabled 记录
-                    String apk = context.getPackageManager()
-                            .getApplicationInfo(MODULE_PKG, 0).sourceDir;
-                    sql.execSQL(
-                            "INSERT INTO modules (module_pkg_name, apk_path, enabled, auto_include) " +
-                            "VALUES (?,?,1,0)",
+                String apk = context.getPackageManager()
+                        .getApplicationInfo(MODULE_PKG, 0).sourceDir;
+
+                if (schema == 2) {
+                    // 新版：modules(mid, ...) + scope(mid, ...)
+                    Long mid = getModuleMidV2(sql);
+                    if (mid == null) {
+                        sql.execSQL(
+                                "INSERT INTO modules (module_pkg_name, apk_path, enabled, auto_include) VALUES (?,?,1,0)",
+                                new Object[]{MODULE_PKG, apk});
+                        mid = getModuleMidV2(sql);
+                    } else {
+                        sql.execSQL("UPDATE modules SET enabled=1 WHERE mid=?", new Object[]{mid});
+                    }
+                    if (mid == null) throw new IllegalStateException("no mid after insert");
+                    sql.execSQL("DELETE FROM scope WHERE mid=? AND user_id=?",
+                            new Object[]{mid, USER_ID});
+                    for (String pkg : targetPkgs) {
+                        if (pkg == null || pkg.isEmpty()) continue;
+                        sql.execSQL("INSERT INTO scope (mid, app_pkg_name, user_id) VALUES (?,?,?)",
+                                new Object[]{mid, pkg, USER_ID});
+                    }
+                } else if (schema == 1) {
+                    // 旧版：modules(module_pkg_name, apk_path) + modules_state + scope(module_pkg_name, ...)
+                    sql.execSQL("INSERT OR IGNORE INTO modules (module_pkg_name, apk_path) VALUES (?,?)",
                             new Object[]{MODULE_PKG, apk});
-                    mid = getModuleMid(sql);
-                } else {
-                    sql.execSQL("UPDATE modules SET enabled=1 WHERE mid=?",
-                            new Object[]{mid});
-                }
-                if (mid == null) throw new IllegalStateException("no mid");
-                // 全量替换主用户(0)作用域
-                sql.execSQL("DELETE FROM scope WHERE mid=? AND user_id=?",
-                        new Object[]{mid, USER_ID});
-                for (String pkg : targetPkgs) {
-                    if (pkg == null || pkg.isEmpty()) continue;
+                    // modules_state: (module_pkg_name, user_id, enabled, ...) — enabled=1
                     sql.execSQL(
-                            "INSERT INTO scope (mid, app_pkg_name, user_id) VALUES (?,?,?)",
-                            new Object[]{mid, pkg, USER_ID});
+                            "INSERT OR REPLACE INTO modules_state (module_pkg_name, user_id, enabled) VALUES (?,?,1)",
+                            new Object[]{MODULE_PKG, USER_ID});
+                    // scope: 全量替换该模块的主用户作用域
+                    sql.execSQL("DELETE FROM scope WHERE module_pkg_name=? AND user_id=?",
+                            new Object[]{MODULE_PKG, USER_ID});
+                    for (String pkg : targetPkgs) {
+                        if (pkg == null || pkg.isEmpty()) continue;
+                        sql.execSQL(
+                                "INSERT INTO scope (module_pkg_name, app_pkg_name, user_id) VALUES (?,?,?)",
+                                new Object[]{MODULE_PKG, pkg, USER_ID});
+                    }
+                } else {
+                    throw new IllegalStateException("unknown schema");
                 }
                 sql.setTransactionSuccessful();
                 edited = true;
@@ -294,7 +356,6 @@ public final class RootScopeManager {
             if (sql != null) try { sql.close(); } catch (Throwable ignored) {}
         }
 
-        // 4) 拷回（覆盖同名文件，保留属主/权限/SELinux）；清旧 wal/shm
         String copyBack =
                 "cp '" + SDB + "' '" + db + "'\n" +
                 "rm -f '" + db + "-wal' '" + db + "-shm'\n" +
@@ -305,8 +366,8 @@ public final class RootScopeManager {
         Result back = runRoot(copyBack);
         cleanupStage();
 
-        // 5) 无论成败都重启守护进程
         boolean restarted = restartDaemon();
+        Log.i(TAG, "syncScope: edited=" + edited + " backOk=" + back.output.contains("BACK_OK") + " restarted=" + restarted);
         return edited && back.output.contains("BACK_OK") && restarted;
     }
 

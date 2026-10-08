@@ -105,9 +105,22 @@ public class Config {
                     db.close();
                     return;
                 }
-                // 检测表结构：新版 Vector/LSPosed 用 modules(mid) + scope(mid, app_pkg_name)
-                // 旧版用 modules_state + scope(module_pkg_name, app_pkg_name)
-                boolean newSchema = tables.contains("modules");
+                // 检测表结构：新版 modules 表有 mid 列，旧版 modules 表只有 module_pkg_name+apk_path
+                boolean hasModulesTable = tables.contains("modules");
+                boolean hasModulesStateTable = tables.contains("modules_state");
+                boolean modulesHasMid = false;
+                if (hasModulesTable) {
+                    android.database.Cursor cc = db.rawQuery("PRAGMA table_info(modules)", null);
+                    while (cc.moveToNext()) {
+                        if ("mid".equals(cc.getString(1))) { modulesHasMid = true; break; }
+                    }
+                    cc.close();
+                }
+                boolean newSchema = hasModulesTable && modulesHasMid;
+                log.append("schema: newSchema=").append(newSchema)
+                        .append(" hasModules=").append(hasModulesTable)
+                        .append(" hasMid=").append(modulesHasMid)
+                        .append(" hasModulesState=").append(hasModulesStateTable).append("\n");
                 if (newSchema) {
                     // 新版：先查 mid，不存在则插入 modules 表
                     int mid = -1;
@@ -146,7 +159,13 @@ public class Config {
                         log.append("new schema scope rows: system/android/self + ").append(n).append(" targets\n");
                     }
                 } else {
-                    // 旧版表结构
+                    // 旧版/中间版表结构：modules(module_pkg_name, apk_path) + modules_state + scope(module_pkg_name)
+                    db.execSQL("INSERT OR IGNORE INTO modules (module_pkg_name, apk_path) VALUES (?, ?)",
+                            new Object[]{MODULE_PKG, ctx.getPackageCodePath()});
+                    if (hasModulesStateTable) {
+                        db.execSQL("INSERT OR REPLACE INTO modules_state (module_pkg_name, user_id, enabled) VALUES (?, 0, 1)",
+                                new Object[]{MODULE_PKG});
+                    }
                     db.execSQL("INSERT OR REPLACE INTO scope (module_pkg_name, app_pkg_name, user_id) VALUES (?, ?, 0)",
                             new Object[]{MODULE_PKG, "system"});
                     db.execSQL("INSERT OR REPLACE INTO scope (module_pkg_name, app_pkg_name, user_id) VALUES (?, ?, 0)",
@@ -230,19 +249,27 @@ public class Config {
             SQLiteDatabase db = SQLiteDatabase.openDatabase(localDb.getAbsolutePath(), null,
                     SQLiteDatabase.OPEN_READONLY);
             try {
-                // 检测表结构：新版有 modules 表，旧版有 modules_state 表
-                boolean hasModules = false;
-                boolean hasModulesState = false;
+                // 检测表结构：新版 modules 表有 mid 列，旧版 modules 表只有 module_pkg_name+apk_path
+                boolean hasModulesTable = false;
+                boolean hasModulesStateTable = false;
+                boolean modulesHasMid = false;
                 android.database.Cursor tc = db.rawQuery(
                         "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('modules','modules_state')", null);
                 while (tc.moveToNext()) {
                     String n = tc.getString(0);
-                    if ("modules".equals(n)) hasModules = true;
-                    if ("modules_state".equals(n)) hasModulesState = true;
+                    if ("modules".equals(n)) hasModulesTable = true;
+                    if ("modules_state".equals(n)) hasModulesStateTable = true;
                 }
                 tc.close();
+                if (hasModulesTable) {
+                    android.database.Cursor cc = db.rawQuery("PRAGMA table_info(modules)", null);
+                    while (cc.moveToNext()) {
+                        if ("mid".equals(cc.getString(1))) { modulesHasMid = true; break; }
+                    }
+                    cc.close();
+                }
 
-                if (hasModules) {
+                if (hasModulesTable && modulesHasMid) {
                     // 新版 Vector/LSPosed: modules(mid, module_pkg_name, enabled) + scope(mid, app_pkg_name, user_id)
                     android.database.Cursor c = db.rawQuery(
                             "SELECT mid, enabled FROM modules WHERE module_pkg_name=? LIMIT 1",
@@ -266,14 +293,19 @@ public class Config {
                         c.close();
                     }
                     st.dbOk = true;
-                } else if (hasModulesState) {
-                    // 旧版 LSPosed: modules_state + scope(module_pkg_name)
+                } else if (hasModulesStateTable || hasModulesTable) {
+                    // 旧版/中间版: modules_state + scope(module_pkg_name)
+                    if (hasModulesStateTable) {
+                        android.database.Cursor c = db.rawQuery(
+                                "SELECT enabled FROM modules_state WHERE module_pkg_name=? AND user_id=0",
+                                new String[]{MODULE_PKG});
+                        if (c.moveToFirst()) st.enabled = c.getInt(0) == 1;
+                        c.close();
+                    } else {
+                        st.enabled = true;
+                    }
                     android.database.Cursor c = db.rawQuery(
-                            "SELECT enabled FROM modules_state WHERE module_pkg_name=? AND user_id=0",
-                            new String[]{MODULE_PKG});
-                    if (c.moveToFirst()) st.enabled = c.getInt(0) == 1;
-                    c.close();
-                    c = db.rawQuery("SELECT app_pkg_name FROM scope WHERE module_pkg_name=?",
+                            "SELECT app_pkg_name FROM scope WHERE module_pkg_name=?",
                             new String[]{MODULE_PKG});
                     while (c.moveToNext()) {
                         String p = c.getString(0);
