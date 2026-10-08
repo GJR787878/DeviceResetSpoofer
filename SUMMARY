@@ -1,1 +1,1 @@
-DeviceResetSpooferX — 清除应用数据后自动生成全新设备识别码的 LSPosed 模块。支持应用内选目标、随机/自定义伪装值（Android ID/IMEI/序列号/MAC/品牌型号/运营商等），保存即生效，免开 LSPosed 管理器。
+DeviceResetSpoofer — 清除应用数据后自动生成全新设备识别码的 LSPosed 模块。支持应用内勾选目标即自动写入作用域生效（root，零点击、免开管理器），随机/自定义伪装值（Android ID/广告ID/IMEI/序列号/MAC/品牌型号/GSF/运营商等），绿色「已注入✓」即生效。

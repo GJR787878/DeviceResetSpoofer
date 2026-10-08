@@ -28,6 +28,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import io.github.gjr787878.devicereset.Config;
 import io.github.gjr787878.devicereset.GlassButtonDrawable;
 import io.github.gjr787878.devicereset.LSPosedScopeHelper;
+import io.github.gjr787878.devicereset.RootScopeManager;
 import io.github.gjr787878.devicereset.xposed.Identity;
 import io.github.gjr787878.devicereset.xposed.IdentityGenerator;
 import io.github.gjr787878.devicereset.xposed.SentinelDetector;
@@ -38,8 +39,8 @@ public class MainActivity extends AppCompatActivity {
     private static final String LANG_ZH = "zh";
     private static final String LANG_EN = "en";
     private static final String LANG_RU = "ru";
-    private static final String UPDATE_REPO = "GJR787878/DeviceResetSpoofer";
-    private static final String REPO_HOME_URL = "https://github.com/GJR787878/DeviceResetSpoofer";
+    private static final String UPDATE_REPO = "GJR787878/DeviceResetSpooferX";
+    private static final String REPO_HOME_URL = "https://github.com/GJR787878/DeviceResetSpooferX";
 
     private static final int COLOR_WHITE = 0xFFFFFFFF;
     private static final int COLOR_BLUE = 0xFF0A84FF;
@@ -78,6 +79,10 @@ public class MainActivity extends AppCompatActivity {
     private volatile boolean scopeDbSystem = false;
     private volatile boolean scopeDbSelf = false;
     private final java.util.Set<String> scopeDbTargets = new java.util.HashSet<>();
+    // root 直写作用域（有 root 时为首选：勾上即生效、零点击、无通知；无 root 才回退 libxposed service）
+    private RootScopeManager rootScope;
+    private volatile boolean rootMode = false;
+    private volatile boolean pickerApplying = false; // 守护进程重启期间忽略重复点选
     private TextView lspStatusTv; // 设置页 LSPosed 框架状态行
 
     // ===== 三语字符串 =====
@@ -90,9 +95,12 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // 注册 LSPosed 框架 binder：新版 LSPosed 会通过 XposedProvider 注入 service，
-        // 之后应用内选目标即可动态请求作用域（免开 LSPosed 管理器）
+        // 注册 LSPosed/Vector 框架 binder：新版框架会通过 XposedProvider 注入 service，
+        // 之后应用内点选目标即可动态请求作用域（免开框架管理器）
         LSPosedScopeHelper.init();
+        // binder 到达/断开时立刻刷新作用域状态（解决“刚进页面还没连上”的时序问题）
+        LSPosedScopeHelper.addConnectionCallback(connected -> runOnUiThread(this::refreshScopeStatus));
+        rootScope = new RootScopeManager(this);
         SharedPreferences prefs = getSharedPreferences("devicereset_ui", MODE_PRIVATE);
         currentLang = prefs.getString(PREFS_LANG, LANG_EN);
         buildRootUI();
@@ -103,6 +111,21 @@ public class MainActivity extends AppCompatActivity {
      *  同时 root 读 LSPosed 配置库真实状态（libxposed service 未连接时兜底显示真实注入状态） */
     private void refreshScopeStatus() {
         new Thread(() -> {
+            // 1) 首选 root：直读作用域库（权威），用于“勾上即生效、零点击”
+            boolean root = rootScope.isRootAvailable();
+            java.util.Set<String> rootScopeSet = root ? rootScope.readScope() : null;
+            if (rootScopeSet != null) {
+                rootMode = true;
+                scopeDbLoaded = true;
+                scopeDbEnabled = true;
+                synchronized (scopeDbTargets) {
+                    scopeDbTargets.clear();
+                    scopeDbTargets.addAll(rootScopeSet);
+                }
+            } else {
+                rootMode = false;
+            }
+            // 2) libxposed service（无 root 时的现代框架路径）
             scopeConnected = LSPosedScopeHelper.isConnected();
             java.util.List<String> sc = LSPosedScopeHelper.getScope();
             synchronized (scopeCache) {
@@ -110,42 +133,49 @@ public class MainActivity extends AppCompatActivity {
                 if (sc != null) scopeCache.addAll(sc);
             }
             scopeLoaded = true;
-            // root 读 db 兜底真实状态
-            Config.ScopeDbState dbs = Config.readLSPosedDbState(this);
-            if (dbs != null && dbs.dbOk) {
-                scopeDbEnabled = dbs.enabled;
-                scopeDbSystem = dbs.hasSystem;
-                scopeDbSelf = dbs.hasSelf;
-                synchronized (scopeDbTargets) {
-                    scopeDbTargets.clear();
-                    scopeDbTargets.addAll(dbs.targets);
+            // 3) root 读 db 兜底（非 rootMode 时用旧的只读方式）
+            if (!rootMode) {
+                Config.ScopeDbState dbs = Config.readLSPosedDbState(this);
+                if (dbs != null && dbs.dbOk) {
+                    scopeDbEnabled = dbs.enabled;
+                    scopeDbSystem = dbs.hasSystem;
+                    scopeDbSelf = dbs.hasSelf;
+                    synchronized (scopeDbTargets) {
+                        scopeDbTargets.clear();
+                        scopeDbTargets.addAll(dbs.targets);
+                    }
+                    scopeDbLoaded = true;
                 }
-                scopeDbLoaded = true;
             }
+            final int scopeCount;
+            synchronized (scopeDbTargets) { scopeCount = scopeDbTargets.size(); }
             runOnUiThread(() -> {
                 refreshAppList();
                 if (lspStatusTv != null) {
-                    if (scopeConnected) {
-                        lspStatusTv.setText(t("LSPosed 框架：已连接，作用域 ",
-                                "LSPosed: connected, scope ",
-                                "LSPosed: подключён, область ") + scopeCache.size() + t(" 个应用",
+                    if (rootMode) {
+                        lspStatusTv.setText(t("框架：root 直写已就绪，作用域 ",
+                                "Framework: root sync ready, scope ",
+                                "Фреймворк: root-синхронизация готова, область ")
+                                + scopeCount + t(" 个应用（勾选立即生效）",
+                                " app(s) (applied instantly)",
+                                " приложений (применяется сразу)"));
+                        lspStatusTv.setTextColor(COLOR_GREEN);
+                    } else if (scopeConnected) {
+                        lspStatusTv.setText(t("框架：已连接，作用域 ",
+                                "Framework: connected, scope ",
+                                "Фреймворк: подключён, область ") + scopeCache.size() + t(" 个应用",
                                 " app(s)",
                                 " приложений"));
                         lspStatusTv.setTextColor(COLOR_BLUE);
-                    } else if (scopeDbLoaded && scopeDbEnabled && scopeDbSystem && scopeDbSelf) {
-                        lspStatusTv.setText(t("LSPosed 框架：已注入（作用域已自动同步✓，重启后全部生效）",
-                                "LSPosed: injected (scope auto-synced✓, reboot to apply all)",
-                                "LSPosed: внедрён (область авто-синхр✓, перезагрузка для применения)"));
-                        lspStatusTv.setTextColor(COLOR_GREEN);
-                    } else if (scopeDbLoaded && scopeDbEnabled && scopeDbSystem) {
-                        lspStatusTv.setText(t("LSPosed 框架：已注入（全局模式✓）",
-                                "LSPosed: injected (global scope✓)",
-                                "LSPosed: внедрён (глобальная область✓)"));
-                        lspStatusTv.setTextColor(COLOR_GREEN);
+                    } else if (scopeDbLoaded && scopeDbEnabled) {
+                        lspStatusTv.setText(t("框架：模块已启用（应用内点选目标后，批准通知即可）",
+                                "Framework: module enabled (select targets in-app and approve the prompt)",
+                                "Фреймворк: модуль включён (выберите приложения и одобрите запрос)"));
+                        lspStatusTv.setTextColor(COLOR_GRAY);
                     } else {
-                        lspStatusTv.setText(t("LSPosed 框架：未连接（模块未启用或框架过旧）",
-                                "LSPosed: not connected (module disabled or old framework)",
-                                "LSPosed: не подключён (модуль выключен или старая версия фреймворка)"));
+                        lspStatusTv.setText(t("框架：未连接（模块未启用或框架过旧）",
+                                "Framework: not connected (module disabled or old framework)",
+                                "Фреймворк: не подключён (модуль выключен или старая версия)"));
                         lspStatusTv.setTextColor(COLOR_GRAY);
                     }
                 }
@@ -153,30 +183,30 @@ public class MainActivity extends AppCompatActivity {
         }).start();
     }
 
-    /** 目标是否在 LSPosed 作用域内（框架已连接才有意义）。
-     * 系统框架(system)/Android 系统(android) 已勾 = 全局注入模式（zygote 注入所有进程，
-     * MainHook 按 targets.txt 过滤），所有目标都算在作用域内。
-     * 未连接 libxposed service 时用数据库真实状态兜底（root 读 scope 表）。 */
+    /**
+     * 目标是否真的被模块注入（绿色「已注入✓」的唯一判据）。
+     *
+     * 关键修正（参考官方框架源码 ConfigCache.cacheScopes / FrameworkService.getAllModules）：
+     * 勾选「系统框架(system)」只会把模块注入 system_server，并不会注入普通应用进程；
+     * 普通应用只有“自己的包名进入作用域表”才会被注入。因此这里不再把 system
+     * 当作全局放行——否则界面会对所有目标误报「已注入✓」（此前钩子全不生效的根因）。
+     * libxposed service 未连接时，用 root 只读 scope 表结果兜底显示。
+     */
     private boolean isInScope(String pkg) {
+        // root 直写模式：以作用域库为权威
+        if (rootMode) {
+            synchronized (scopeDbTargets) {
+                return scopeDbLoaded && scopeDbTargets.contains(pkg);
+            }
+        }
         synchronized (scopeCache) {
             if (scopeLoaded && scopeConnected) {
-                if (scopeCache.contains("system") || scopeCache.contains("android")) return true;
                 return scopeCache.contains(pkg);
             }
         }
         synchronized (scopeDbTargets) {
-            return scopeDbLoaded && (scopeDbSystem || scopeDbTargets.contains(pkg));
+            return scopeDbLoaded && scopeDbTargets.contains(pkg);
         }
-    }
-
-    /** 是否为全局注入模式（系统框架已勾选） */
-    private boolean isGlobalScope() {
-        synchronized (scopeCache) {
-            if (scopeLoaded && scopeConnected) {
-                return scopeCache.contains("system") || scopeCache.contains("android");
-            }
-        }
-        return scopeDbLoaded && scopeDbSystem;
     }
 
     @Override
@@ -191,91 +221,40 @@ public class MainActivity extends AppCompatActivity {
 
     private void buildRootUI() {
         float d = getResources().getDisplayMetrics().density;
-        // §3.4 平板适配：smallestScreenWidthDp >= 600 视为平板
-        boolean isTablet = getResources().getConfiguration().smallestScreenWidthDp >= 600;
-
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(0xFF000000);
 
         contentFrame = new FrameLayout(this);
         FrameLayout.LayoutParams contentLp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
-
-        // §3.6.1 导航栏磨砂渐变
-        GradientDrawable navBg;
-        LinearLayout navBar = new LinearLayout(this);
-        FrameLayout.LayoutParams navLp;
-
-        if (isTablet) {
-            // §3.4 平板：左侧竖排悬浮胶囊，窄宽72dp，约半屏高，垂直居中，图标+文字按钮
-            navBar.setOrientation(LinearLayout.VERTICAL);
-            navBar.setGravity(Gravity.CENTER_VERTICAL | Gravity.CENTER_HORIZONTAL);
-            navBar.setPadding(0, Math.round(16 * d), 0, Math.round(16 * d));
-            navBg = new GradientDrawable(
-                    GradientDrawable.Orientation.LEFT_RIGHT,
-                    new int[]{0xF06A6A72, 0x882C2C2E});
-            navBg.setCornerRadius(28 * d);
-            navBg.setStroke(Math.round(1 * d), 0x55FFFFFF);
-            navBar.setBackground(navBg);
-            // 约半屏高：屏幕高度dp的50%
-            int screenHeightDp = (int) (getResources().getDisplayMetrics().heightPixels / d);
-            int navHeight = Math.round(screenHeightDp * 0.5f * d);
-            navLp = new FrameLayout.LayoutParams(
-                    Math.round(72 * d), navHeight);
-            navLp.gravity = Gravity.START | Gravity.CENTER_VERTICAL;
-            navLp.leftMargin = Math.round(16 * d);
-            // 内容区左侧让出导航空间
-            contentLp.leftMargin = Math.round(104 * d);
-            contentLp.bottomMargin = 0;
-        } else {
-            // 手机：底部横排导航
-            navBar.setOrientation(LinearLayout.HORIZONTAL);
-            navBar.setGravity(Gravity.CENTER);
-            navBg = new GradientDrawable(
-                    GradientDrawable.Orientation.TOP_BOTTOM,
-                    new int[]{0xF06A6A72, 0x882C2C2E});
-            navBg.setCornerRadius(28 * d);
-            navBg.setStroke(Math.round(1 * d), 0x55FFFFFF);
-            navBar.setBackground(navBg);
-            navLp = new FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, Math.round(64 * d));
-            navLp.gravity = Gravity.BOTTOM;
-            navLp.leftMargin = Math.round(16 * d);
-            navLp.rightMargin = Math.round(16 * d);
-            navLp.bottomMargin = Math.round(16 * d);
-            contentLp.bottomMargin = Math.round(80 * d);
-        }
-
+        contentLp.bottomMargin = Math.round(80 * d);
         root.addView(contentFrame, contentLp);
+
+        LinearLayout navBar = new LinearLayout(this);
+        navBar.setOrientation(LinearLayout.HORIZONTAL);
+        navBar.setGravity(Gravity.CENTER);
+        GradientDrawable navBg = new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{0xF06A6A72, 0x882C2C2E});
+        navBg.setCornerRadius(28 * d);
+        navBg.setStroke(Math.round(1 * d), 0x55FFFFFF);
+        navBar.setBackground(navBg);
+        FrameLayout.LayoutParams navLp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Math.round(64 * d));
+        navLp.gravity = Gravity.BOTTOM;
+        navLp.leftMargin = Math.round(16 * d);
+        navLp.rightMargin = Math.round(16 * d);
+        navLp.bottomMargin = Math.round(16 * d);
         root.addView(navBar, navLp);
 
         navApps = makeNavButton();
         navSettings = makeNavButton();
-
-        if (isTablet) {
-            // 平板：竖排图标+文字按钮，高约72dp
-            LinearLayout.LayoutParams navBtnLp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, Math.round(72 * d));
-            navBtnLp.topMargin = Math.round(4 * d);
-            navBtnLp.bottomMargin = Math.round(4 * d);
-            navBtnLp.leftMargin = Math.round(6 * d);
-            navBtnLp.rightMargin = Math.round(6 * d);
-            // 图标在上，文字在下
-            navApps.setCompoundDrawablesWithIntrinsicBounds(0, android.R.drawable.ic_menu_view, 0, 0);
-            navSettings.setCompoundDrawablesWithIntrinsicBounds(0, android.R.drawable.ic_menu_preferences, 0, 0);
-            navApps.setGravity(Gravity.CENTER);
-            navSettings.setGravity(Gravity.CENTER);
-            navBar.addView(navApps, navBtnLp);
-            navBar.addView(navSettings, navBtnLp);
-        } else {
-            // 手机：横排按钮
-            LinearLayout.LayoutParams navBtnLp = new LinearLayout.LayoutParams(
-                    0, Math.round(48 * d), 1f);
-            navBtnLp.leftMargin = Math.round(4 * d);
-            navBtnLp.rightMargin = Math.round(4 * d);
-            navBar.addView(navApps, navBtnLp);
-            navBar.addView(navSettings, navBtnLp);
-        }
+        LinearLayout.LayoutParams navBtnLp = new LinearLayout.LayoutParams(
+                0, Math.round(48 * d), 1f);
+        navBtnLp.leftMargin = Math.round(4 * d);
+        navBtnLp.rightMargin = Math.round(4 * d);
+        navBar.addView(navApps, navBtnLp);
+        navBar.addView(navSettings, navBtnLp);
 
         setContentView(root);
         switchTab(0);
@@ -448,38 +427,21 @@ public class MainActivity extends AppCompatActivity {
         dot.setVisibility(hasIdentity ? View.VISIBLE : View.INVISIBLE);
         row.addView(dot, new LinearLayout.LayoutParams(Math.round(12 * d), Math.round(12 * d)));
 
-        // 作用域状态：libxposed 未连接时用数据库真实注入状态兜底显示「已注入✓」，避免误导「框架未连接」
-        if (scopeLoaded || scopeDbLoaded) {
-            TextView scopeTv = new TextView(this);
-            scopeTv.setTextSize(10);
-            if (scopeConnected) {
-                if (isInScope(pkg)) {
-                    if (isGlobalScope()) {
-                        scopeTv.setText(t("作用域✓全局", "Scoped✓global", "В области✓глоб"));
-                    } else {
-                        scopeTv.setText(t("作用域✓", "Scoped✓", "В области✓"));
-                    }
-                    scopeTv.setTextColor(COLOR_BLUE);
-                } else {
-                    scopeTv.setText(t("未授权", "Not scoped", "Не в области"));
-                    scopeTv.setTextColor(COLOR_GRAY);
-                }
-            } else if (scopeDbLoaded && scopeDbEnabled && scopeDbSystem) {
-                // 数据库实证：模块已启用 + 系统框架已勾 = 全局注入生效（真授权机制在线）
-                scopeTv.setText(t("已注入✓", "Injected✓", "Внедрён✓"));
-                scopeTv.setTextColor(COLOR_GREEN);
-            } else if (scopeDbLoaded && scopeDbEnabled) {
-                scopeTv.setText(t("模块已启用", "Module on", "Модуль вкл"));
-                scopeTv.setTextColor(COLOR_GRAY);
-            } else {
-                scopeTv.setText(t("框架未连接", "No fw", "Нет фрейм"));
-                scopeTv.setTextColor(COLOR_GRAY);
-            }
-            LinearLayout.LayoutParams scopeLp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            scopeLp.leftMargin = Math.round(6 * d);
-            row.addView(scopeTv, scopeLp);
+        // 注入状态（绿色文字 = 已注入✓；灰色 = 未注入）。
+        // 只有“自己包名在作用域内”才显示绿色，不再因系统框架已勾而全局误报。
+        TextView scopeTv = new TextView(this);
+        scopeTv.setTextSize(11);
+        if (isInScope(pkg)) {
+            scopeTv.setText(t("已注入✓", "Injected✓", "Внедрён✓"));
+            scopeTv.setTextColor(COLOR_GREEN);
+        } else {
+            scopeTv.setText(t("未注入", "Not injected", "Не внедрён"));
+            scopeTv.setTextColor(COLOR_GRAY);
         }
+        LinearLayout.LayoutParams scopeLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        scopeLp.leftMargin = Math.round(8 * d);
+        row.addView(scopeTv, scopeLp);
 
         row.setOnClickListener(v -> showAppDetailDialog(pkg, name));
         // 长按删除：统一玻璃确认弹窗，取消选择并删除身份（哨兵文件 + 模块配置，不卸载应用本身）
@@ -517,14 +479,11 @@ public class MainActivity extends AppCompatActivity {
     private void showAppDetailDialog(String pkg, String appName) {
         // 身份读取：统一读取器（配置→内部哨兵→外部哨兵，与 MainHook 生效顺序一致；单点缺失自动回写对齐）
         String json = readIdentityAll(pkg);
-        // 打开详情即视为选中目标应用（同步到模块配置，MainHook 只对目标生效）
+        // 打开详情即视为选中目标应用（同步到模块配置，主列表可见）。
+        // 作用域的加入/移除统一在「选择目标应用」列表点选触发，这里不再自动请求，
+        // 避免每次打开详情都重复下发授权通知。
         getSharedPreferences("devicereset_ui", MODE_PRIVATE).edit().putString("last_target_pkg", pkg).apply();
         Config.addTargetPackage(this, pkg);
-        if (LSPosedScopeHelper.isConnected()) {
-            LSPosedScopeHelper.requestScope(pkg, scopeEventListener());
-        } else {
-            // 3.9.2: 哨兵驱动，无需 root 写库
-        }
         Identity id = (json != null && json.startsWith("{")) ? Identity.fromJson(json) : null;
 
         float d = getResources().getDisplayMetrics().density;
@@ -1036,6 +995,8 @@ public class MainActivity extends AppCompatActivity {
         cancelLp.topMargin = Math.round(10 * d);
         root.addView(btnCancel, cancelLp);
         btnCancel.setOnClickListener(v -> dialog.dismiss());
+        // 弹窗关闭后同步刷新主列表（勾选/移除的结果即时反映）
+        dialog.setOnDismissListener(dd -> refreshAppList());
 
         dialog.setContentView(root);
         Window win = dialog.getWindow();
@@ -1114,8 +1075,9 @@ public class MainActivity extends AppCompatActivity {
                     pickerPkgCache = currentPkgs;
                     entries = rebuilt;
                 }
-                final java.util.Set<String> already = Config.getTargetPackages(this);
                 runOnUiThread(() -> {
+                    // 行控件映射（包名 → 行状态控件），作用域变化时原地刷新
+                    final java.util.HashMap<String, PickerRow> pickerRows = new java.util.HashMap<>();
                     for (final AppEntry e : entries) {
                         LinearLayout row = new LinearLayout(this);
                         row.setOrientation(LinearLayout.HORIZONTAL);
@@ -1154,8 +1116,8 @@ public class MainActivity extends AppCompatActivity {
                         tc.setOrientation(LinearLayout.VERTICAL);
                         LinearLayout.LayoutParams tcLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
                         tcLp.leftMargin = Math.round(12 * d);
-                        TextView n = new TextView(this);
-                        n.setText(e.label + (already.contains(e.pkg) ? "  ✓" : ""));
+                        final TextView n = new TextView(this);
+                        n.setText(e.label);
                         n.setTextSize(15);
                         n.setTextColor(COLOR_WHITE);
                         TextView p = new TextView(this);
@@ -1166,7 +1128,31 @@ public class MainActivity extends AppCompatActivity {
                         tc.addView(p);
                         row.addView(tc, tcLp);
 
-                        row.setOnClickListener(v -> addTargetFromPicker(e.pkg, dialog));
+                        // 蓝点 = 已生成伪装值（与主列表一致）
+                        final View dot = new View(this);
+                        GradientDrawable dotBg = new GradientDrawable();
+                        dotBg.setColor(COLOR_BLUE);
+                        dotBg.setShape(GradientDrawable.OVAL);
+                        dot.setBackground(dotBg);
+                        LinearLayout.LayoutParams dotLp = new LinearLayout.LayoutParams(
+                                Math.round(10 * d), Math.round(10 * d));
+                        dotLp.rightMargin = Math.round(8 * d);
+                        row.addView(dot, dotLp);
+
+                        // 右侧勾选：绿色 ✓ = 已注入（在作用域内）
+                        final TextView chk = new TextView(this);
+                        chk.setTextSize(14);
+                        row.addView(chk, new LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+                        // 记录行控件，供作用域变化时原地刷新
+                        final PickerRow pr = new PickerRow(e.pkg, n, dot, chk);
+                        pickerRows.put(e.pkg, pr);
+
+                        // 点击直接切换作用域（勾选=请求并下发批准通知；再点=移除）
+                        row.setOnClickListener(v -> toggleScopeFromPicker(pr, pickerRows));
+                        updatePickerRow(pr);
+
                         LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(
                                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
                         rLp.bottomMargin = Math.round(8 * d);
@@ -1205,40 +1191,200 @@ public class MainActivity extends AppCompatActivity {
         emptyTv.setVisibility(shown == 0 ? View.VISIBLE : View.GONE);
     }
 
-    /** 选择器点选：只加入目标配置，不生成身份（伪装值必须手动触发：详情中随机/自定义） */
-    private void addTargetFromPicker(String pkg, Dialog dialog) {
+    /**
+     * 选择器点选：直接切换作用域（不关闭弹窗，可连续勾选多个）。
+     * - 当前未注入 → 加入目标并 requestScope：框架下发带「批准/拒绝」的通知，
+     *   用户点「批准」后该应用才真正进入作用域（安全要求，无法静默）；
+     * - 当前已注入 → removeScope 立即移除，并从目标列表删除。
+     */
+    private void toggleScopeFromPicker(final PickerRow pr,
+                                       final java.util.HashMap<String, PickerRow> allRows) {
+        final String pkg = pr.pkg;
+        if (pickerApplying) return; // 守护进程重启中，忽略重复点选
         getSharedPreferences("devicereset_ui", MODE_PRIVATE).edit().putString("last_target_pkg", pkg).apply();
-        Config.addTargetPackage(this, pkg);
-        // 新版 LSPosed：应用内弹授权窗动态加入作用域（免开管理器）；老框架回退 root 写库
-        if (LSPosedScopeHelper.isConnected()) {
-            LSPosedScopeHelper.requestScope(pkg, scopeEventListener());
-        } else {
-            // 3.9.2: 哨兵驱动，无需 root 写库
+        // 图二是纯“目标选择”：以是否为目标（而非注入状态）决定增删，保证行始终可点
+        final boolean adding = !Config.isTargetPackage(this, pkg);
+
+        // ================= root 直写：每次点选立即同步、零点击、无通知 =================
+        if (rootMode) {
+            // 先更新本地目标列表（控制主页是否展示该 App）
+            if (adding) Config.addTargetPackage(this, pkg);
+            else Config.removeTargetPackage(this, pkg);
+            // 写入作用域 = 当前完整目标集（全量替换），保证与图一一致
+            final java.util.Set<String> desired = new java.util.LinkedHashSet<>(
+                    Config.getTargetPackages(this));
+            // 进度提示
+            final android.app.ProgressDialog pd = new android.app.ProgressDialog(this);
+            pd.setMessage(t("正在应用作用域（重启框架服务）…",
+                    "Applying scope (restarting framework service)…",
+                    "Применение области (перезапуск службы фреймворка)…"));
+            pd.setCancelable(false);
+            pd.show();
+            pickerApplying = true;
+            final boolean fAdding = adding;
+            new Thread(() -> {
+                boolean ok = rootScope.syncScope(desired);
+                if (ok) {
+                    rootScope.forceStop(pkg); // 强制停止目标，下次打开即为注入后的进程
+                    synchronized (scopeDbTargets) {
+                        scopeDbTargets.clear();
+                        scopeDbTargets.addAll(desired);
+                    }
+                } else {
+                    // 失败回滚本地目标列表
+                    if (fAdding) Config.removeTargetPackage(this, pkg);
+                    else Config.addTargetPackage(this, pkg);
+                }
+                final boolean fok = ok;
+                runOnUiThread(() -> {
+                    pickerApplying = false;
+                    try { pd.dismiss(); } catch (Throwable ignored) {}
+                    for (PickerRow r : allRows.values()) updatePickerRow(r);
+                    refreshAppList();
+                    Toast.makeText(MainActivity.this, fok
+                            ? (fAdding
+                                ? t("已注入✓，重新打开该应用即生效",
+                                    "Injected✓; reopen the app to take effect",
+                                    "Внедрено✓; перезапустите приложение")
+                                : t("已移除作用域: ", "Scope removed: ", "Убрано из области: ") + pkg)
+                            : t("作用域写入失败，请确认 root/框架正常",
+                                "Failed to write scope; check root/framework",
+                                "Не удалось записать область; проверьте root/фреймворк"),
+                            Toast.LENGTH_SHORT).show();
+                });
+            }).start();
+            return;
         }
-        Toast.makeText(this,
-                t("已添加目标应用（可在详情中点击「随机」/「自定义」生成伪装值）", "Target app added (tap Random / Customize in its detail to generate a spoofed identity)", "Приложение добавлено (нажмите «Случайно»/«Настроить» в его деталях, чтобы создать подменённую идентичность)"),
-                Toast.LENGTH_SHORT).show();
-        refreshAppList();
-        dialog.dismiss();
+
+        // ================= 无 root：回退 libxposed service（需在通知点批准） =================
+        if (!adding) {
+            // 已注入 → 移除作用域 + 目标
+            LSPosedScopeHelper.removeScope(pkg);
+            Config.removeTargetPackage(this, pkg);
+            // removeScope 无回调，乐观地从本地作用域缓存移除，让行状态立即变化
+            synchronized (scopeCache) {
+                scopeCache.remove(pkg);
+            }
+            updatePickerRow(pr);
+            Toast.makeText(this,
+                    t("已移除作用域: ", "Scope removed: ", "Убрано из области: ") + pkg,
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        // 未注入 → 加入目标并请求作用域
+        Config.addTargetPackage(this, pkg);
+        if (LSPosedScopeHelper.isConnected()) {
+            // 专用回调：批准/失败后刷新选择器各行 + 主列表
+            LSPosedScopeHelper.requestScope(pkg, new XposedService.OnScopeEventListener() {
+                @Override
+                public void onScopeRequestApproved(java.util.List<String> packageNames) {
+                    refreshScopeCacheNow();
+                    runOnUiThread(() -> {
+                        for (PickerRow r : allRows.values()) updatePickerRow(r);
+                        refreshAppList();
+                        Toast.makeText(MainActivity.this,
+                                t("已加入作用域，重新打开目标应用即可生效",
+                                        "Scope granted; reopen the target app to take effect",
+                                        "Добавлено в область; перезапустите приложение для применения"),
+                                Toast.LENGTH_SHORT).show();
+                    });
+                }
+
+                @Override
+                public void onScopeRequestFailed(String message) {
+                    refreshScopeCacheNow();
+                    runOnUiThread(() -> {
+                        for (PickerRow r : allRows.values()) updatePickerRow(r);
+                        Toast.makeText(MainActivity.this,
+                                t("作用域请求失败: ", "Scope request failed: ", "Ошибка запроса области: ") + message,
+                                Toast.LENGTH_SHORT).show();
+                    });
+                }
+            });
+            Toast.makeText(this,
+                    t("请下拉通知栏，点击授权通知上的「批准」（无需打开框架管理器）",
+                            "Pull down the notification shade and tap Approve on the authorization notification (no manager needed)",
+                            "Опустите шторку уведомлений и нажмите «Одобрить» (менеджер не нужен)"),
+                    Toast.LENGTH_LONG).show();
+        } else {
+            Toast.makeText(this,
+                    t("框架未连接：请先在 LSPosed/Vector 管理器启用本模块，再回来点选",
+                            "Framework not connected: enable this module in the LSPosed/Vector manager first, then come back",
+                            "Фреймворк не подключён: включите модуль в менеджере, затем вернитесь"),
+                    Toast.LENGTH_LONG).show();
+        }
+        updatePickerRow(pr);
     }
 
-    /** LSPosed 作用域请求回调：授权/失败时给出轻提示（不打扰流程） */
+    /**
+     * 刷新选择器单行（图二只是“选择”，不显示注入绿色）：
+     * 蓝点=已生成伪装值；右侧白色 ✓ = 已选为目标（会出现在图一）。行始终可点。
+     */
+    private void updatePickerRow(PickerRow pr) {
+        boolean hasIdentity = Config.isIdentityConfigured(this, pr.pkg);
+        pr.dot.setVisibility(hasIdentity ? View.VISIBLE : View.INVISIBLE);
+        boolean isTarget = Config.isTargetPackage(this, pr.pkg);
+        pr.name.setTextColor(COLOR_WHITE); // 图二名称恒为白色，不标绿
+        if (isTarget) {
+            pr.chk.setText("✓");
+            pr.chk.setTextColor(COLOR_WHITE); // 中性白色勾选，非绿色
+        } else {
+            pr.chk.setText("");
+        }
+    }
+
+    /** 选择器行状态控件集合 */
+    private static class PickerRow {
+        final String pkg;
+        final TextView name;
+        final View dot;
+        final TextView chk;
+        PickerRow(String pkg, TextView name, View dot, TextView chk) {
+            this.pkg = pkg;
+            this.name = name;
+            this.dot = dot;
+            this.chk = chk;
+        }
+    }
+
+    /** LSPosed/Vector 作用域请求回调：批准/失败后先同步权威作用域并刷新界面，再轻提示 */
     private XposedService.OnScopeEventListener scopeEventListener() {
         return new XposedService.OnScopeEventListener() {
             @Override
             public void onScopeRequestApproved(java.util.List<String> packageNames) {
-                runOnUiThread(() -> Toast.makeText(MainActivity.this,
-                        t("已加入作用域，重新打开目标应用即可生效", "Scope granted; reopen the target app to take effect", "Добавлено в область; перезапустите приложение для применения"),
-                        Toast.LENGTH_SHORT).show());
+                refreshScopeCacheNow();
+                runOnUiThread(() -> {
+                    refreshAppList();
+                    Toast.makeText(MainActivity.this,
+                            t("已加入作用域，重新打开目标应用即可生效",
+                                    "Scope granted; reopen the target app to take effect",
+                                    "Добавлено в область; перезапустите приложение для применения"),
+                            Toast.LENGTH_SHORT).show();
+                });
             }
 
             @Override
             public void onScopeRequestFailed(String message) {
-                runOnUiThread(() -> Toast.makeText(MainActivity.this,
-                        t("作用域请求失败: ", "Scope request failed: ", "Ошибка запроса области: ") + message,
-                        Toast.LENGTH_SHORT).show());
+                refreshScopeCacheNow();
+                runOnUiThread(() -> {
+                    refreshAppList();
+                    Toast.makeText(MainActivity.this,
+                            t("作用域请求失败: ", "Scope request failed: ", "Ошибка запроса области: ") + message,
+                            Toast.LENGTH_SHORT).show();
+                });
             }
         };
+    }
+
+    /** 同步读取一次权威作用域到缓存（回调线程用，不读 root 库，避免阻塞） */
+    private void refreshScopeCacheNow() {
+        java.util.List<String> sc = LSPosedScopeHelper.getScope();
+        scopeConnected = LSPosedScopeHelper.isConnected();
+        synchronized (scopeCache) {
+            scopeCache.clear();
+            if (sc != null) scopeCache.addAll(sc);
+        }
+        scopeLoaded = true;
     }
 
     /** 选择器列表条目 */
@@ -1500,8 +1646,6 @@ public class MainActivity extends AppCompatActivity {
     // ===== 设置页 =====
     private View buildSettingsPage() {
         float d = getResources().getDisplayMetrics().density;
-        // §3.4 平板适配
-        boolean isTablet = getResources().getConfiguration().smallestScreenWidthDp >= 600;
         ScrollView sv = new ScrollView(this);
         LinearLayout ll = new LinearLayout(this);
         ll.setOrientation(LinearLayout.VERTICAL);
@@ -1526,34 +1670,29 @@ public class MainActivity extends AppCompatActivity {
         subLp.topMargin = Math.round(8 * d);
         ll.addView(subtitle, subLp);
 
-        // LSPosed 框架状态（作用域同步是否就绪）
-        addSettingsSection(ll, t("LSPosed 框架", "LSPosed Framework", "Фреймворк LSPosed"), d);
+        // 框架状态（是否已连接 libxposed service）
+        addSettingsSection(ll, t("框架状态", "Framework", "Фреймворк"), d);
         lspStatusTv = new TextView(this);
         lspStatusTv.setText(t("连接中...", "Connecting...", "Подключение..."));
         lspStatusTv.setTextSize(14);
         lspStatusTv.setTextColor(COLOR_GRAY);
         if (scopeLoaded || scopeDbLoaded) {
             if (scopeConnected) {
-                lspStatusTv.setText(t("LSPosed 框架：已连接，作用域 ",
-                        "LSPosed: connected, scope ",
-                        "LSPosed: подключён, область ") + scopeCache.size() + t(" 个应用",
+                lspStatusTv.setText(t("框架：已连接，作用域 ",
+                        "Framework: connected, scope ",
+                        "Фреймворк: подключён, область ") + scopeCache.size() + t(" 个应用",
                         " app(s)",
                         " приложений"));
                 lspStatusTv.setTextColor(COLOR_BLUE);
-            } else if (scopeDbLoaded && scopeDbEnabled && scopeDbSystem) {
-                lspStatusTv.setText(t("LSPosed 框架：已注入（全局模式✓，伪装已生效）",
-                        "LSPosed: injected (global scope✓, spoof active)",
-                        "LSPosed: внедрён (глобальная область✓, спуфинг активен)"));
-                lspStatusTv.setTextColor(COLOR_GREEN);
             } else if (scopeDbLoaded && scopeDbEnabled) {
-                lspStatusTv.setText(t("LSPosed 框架：模块已启用（请勾选系统框架）",
-                        "LSPosed: module enabled (select system framework)",
-                        "LSPosed: модуль включён (выберите системный фреймворк)"));
+                lspStatusTv.setText(t("框架：模块已启用（在「应用」页点选目标并批准通知即可）",
+                        "Framework: module enabled (select targets on the Apps tab and approve the prompt)",
+                        "Фреймворк: модуль включён (выберите приложения и одобрите запрос)"));
                 lspStatusTv.setTextColor(COLOR_GRAY);
             } else {
-                lspStatusTv.setText(t("LSPosed 框架：未连接（模块未启用或框架过旧）",
-                        "LSPosed: not connected (module disabled or old framework)",
-                        "LSPosed: не подключён (модуль выключен или старая версия фреймворка)"));
+                lspStatusTv.setText(t("框架：未连接（模块未启用或框架过旧）",
+                        "Framework: not connected (module disabled or old framework)",
+                        "Фреймворк: не подключён (модуль выключен или старая версия)"));
                 lspStatusTv.setTextColor(COLOR_GRAY);
             }
         }
@@ -1563,11 +1702,11 @@ public class MainActivity extends AppCompatActivity {
         lspLp.bottomMargin = Math.round(10 * d);
         ll.addView(lspStatusTv, lspLp);
 
-        // 作用域模式说明：一次配置后应用内全托管
+        // 作用域使用说明：应用内全托管，无需勾选系统框架
         TextView scopeTip = new TextView(this);
-        scopeTip.setText(t("建议：在 LSPosed 管理器为本模块勾选「系统框架」一次，之后无需再打开 LSPosed——在本应用选择/删除目标即可生效（全局注入 + 应用内过滤）。",
-                "Tip: tick \"System Framework\" for this module once in LSPosed Manager; afterwards you never need to open LSPosed again - add/remove targets right here (global injection + in-app filtering).",
-                "Совет: отметьте «Системный фреймворк» для модуля в LSPosed один раз — больше не нужно открывать LSPosed: выбирайте/удаляйте цели прямо здесь (глобальное внедрение + фильтрация в приложении)."));
+        scopeTip.setText(t("无需勾选「系统框架」。在「应用」页点「＋ 选择应用」，点选目标后下拉通知栏、点授权通知上的「批准」即可（无需打开框架管理器）；之后重新打开目标应用即生效。再点一次该应用可移除作用域。",
+                "No need to tick \"System Framework\". On the Apps tab tap \"+ Select App\", choose a target, then pull down the notification shade and tap Approve on the authorization notification (no manager needed); reopen the target app to apply. Tap the app again to remove it.",
+                "Отмечать «Системный фреймворк» не нужно. На вкладке «Приложения» нажмите «+ Выбрать приложение», выберите цель, опустите шторку и нажмите «Одобрить» (менеджер не нужен); перезапустите приложение. Повторное нажатие убирает область."));
         scopeTip.setTextSize(12);
         scopeTip.setTextColor(COLOR_GRAY);
         LinearLayout.LayoutParams tipLp = new LinearLayout.LayoutParams(
@@ -1599,40 +1738,21 @@ public class MainActivity extends AppCompatActivity {
                 t("伪装 GSF ID", "Spoof GSF ID", "Подмена GSF ID"),
                 t("伪装 运营商信息", "Spoof Carrier Info", "Подмена информации оператора")
         };
-        // §3.4 平板：按钮网格化，每行3个短胶囊并列；手机：竖排整行
-        android.widget.GridLayout grid = null;
-        if (isTablet) {
-            grid = new android.widget.GridLayout(this);
-            grid.setColumnCount(3);
-            ll.addView(grid, makeFormLp(d));
-        }
         for (int i = 0; i < 7; i++) {
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
-            row.setGravity(Gravity.CENTER);
-            row.setPadding(Math.round(12 * d), Math.round(14 * d), Math.round(12 * d), Math.round(14 * d));
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(Math.round(16 * d), Math.round(12 * d), Math.round(16 * d), Math.round(12 * d));
             hookGlass[i] = new GlassButtonDrawable(24 * d, 1 * d, false);
             row.setBackground(hookGlass[i]);
             hookTv[i] = new TextView(this);
             hookTv[i].setText(hookLabels[i]);
-            hookTv[i].setTextSize(13);
+            hookTv[i].setTextSize(15);
             hookTv[i].setTextColor(COLOR_WHITE);
-            hookTv[i].setGravity(Gravity.CENTER);
-            row.addView(hookTv[i], new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            row.addView(hookTv[i], new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
             final int idx = i;
             row.setOnClickListener(v -> toggleHook(idx));
-            if (isTablet && grid != null) {
-                // 平板：网格等宽，每个占1列
-                android.widget.GridLayout.LayoutParams glp = new android.widget.GridLayout.LayoutParams();
-                glp.width = 0;
-                glp.height = ViewGroup.LayoutParams.WRAP_CONTENT;
-                glp.columnSpec = android.widget.GridLayout.spec(android.widget.GridLayout.UNDEFINED, 1f);
-                glp.setMargins(Math.round(4 * d), Math.round(4 * d), Math.round(4 * d), Math.round(4 * d));
-                grid.addView(row, glp);
-            } else {
-                ll.addView(row, makeFormLp(d));
-            }
+            ll.addView(row, makeFormLp(d));
         }
         loadHookStates();
 
@@ -1641,62 +1761,53 @@ public class MainActivity extends AppCompatActivity {
         // 维护
         addSettingsSection(ll, t("维护", "Maintenance", "Обслуживание"), d);
 
-        Button btnAbout = makeGlassBtn(t("关于", "About", "О программе"), 15);
-        Button btnExportLog = makeGlassBtn(t("导出诊断日志", "Export Diagnostic Log", "Экспорт диагностического журнала"), 15);
-        btnAbout.setOnClickListener(v -> showAboutDialog());
-        btnExportLog.setOnClickListener(v -> exportDiagnosticLog());
 
-        if (isTablet) {
-            // §3.4 平板：维护按钮横排并列
-            LinearLayout maintainRow = new LinearLayout(this);
-            maintainRow.setOrientation(LinearLayout.HORIZONTAL);
-            LinearLayout.LayoutParams mLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-            mLp.rightMargin = Math.round(6 * d);
-            maintainRow.addView(btnAbout, mLp);
-            LinearLayout.LayoutParams mLp2 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-            mLp2.leftMargin = Math.round(6 * d);
-            maintainRow.addView(btnExportLog, mLp2);
-            ll.addView(maintainRow, makeFormLp(d));
-        } else {
-            ll.addView(btnAbout, makeFormLp(d));
-            ll.addView(btnExportLog, makeFormLp(d));
-        }
+        Button btnAbout = makeGlassBtn(t("关于", "About", "О программе"), 15);
+        ll.addView(btnAbout, makeFormLp(d));
+        btnAbout.setOnClickListener(v -> showAboutDialog());
+
+        Button btnExportLog = makeGlassBtn(t("导出诊断日志", "Export Diagnostic Log", "Экспорт диагностического журнала"), 15);
+        ll.addView(btnExportLog, makeFormLp(d));
+        btnExportLog.setOnClickListener(v -> exportDiagnosticLog());
 
         // 说明文字（原首页内容）
         addSettingsSection(ll, t("使用方法", "Usage", "Использование"), d);
         addInfoBlock(ll, t("使用方法", "How to use", "Как использовать"),
-                t("1. 首次安装：LSPosed → 模块 → 启用本模块（「系统框架」已自动预勾选）→ 重启手机一次\n" +
-                  "2. 之后无需再打开 LSPosed 管理器\n" +
-                  "3. 在「应用」页点击「＋ 选择应用」添加任意已安装应用为目标\n" +
-                  "4. 打开目标应用详情 → 点击「随机」或「自定义」→ 保存（手动触发写入）\n" +
-                  "5. 显示「修改成功」后，直接打开目标应用即按伪装身份生效，无需重启\n" +
-                  "6. 若目标应用仍读到旧值，保存后选择「清空所有数据」再打开该应用",
-                  "1. First install: LSPosed -> Modules -> Enable this module (\"System Framework\" is pre-checked) -> reboot once\n" +
-                  "2. Afterwards, no need to open LSPosed Manager again\n" +
-                  "3. Tap \"+ Select App\" on the Apps tab to add any installed app as target\n" +
-                  "4. Open the target app's detail -> tap Random / Customize -> Save (manual trigger)\n" +
-                  "5. You'll see \"Saved\"; just reopen the target app and the spoofed identity applies, no reboot needed\n" +
-                  "6. If the target app still reads old values, choose \"Clear all data\" after saving and reopen the app",
-                  "1. Первая установка: LSPosed -> Модули -> Включить модуль («Системный фреймворк» уже отмечен) -> перезагрузить один раз\n" +
-                  "2. Далее открывать LSPosed Manager больше не нужно\n" +
-                  "3. На вкладке «Приложения» нажмите «+ Выбрать приложение», чтобы добавить любое установленное приложение\n" +
-                  "4. Откройте детали приложения -> «Случайно»/«Настроить» -> Сохранить (ручная запись)\n" +
-                  "5. Появится «Сохранено»; просто откройте приложение снова — подменённая идентичность применится, перезагрузка не нужна\n" +
-                  "6. Если приложение всё ещё читает старые значения, выберите «Очистить все данные» после сохранения и откройте его заново"), d);
+                t("1. 首次安装：LSPosed/Vector → 模块 → 启用本模块（无需勾选系统框架，也无需重启）\n" +
+                  "2. 回到本应用，之后无需再打开框架管理器\n" +
+                  "3. 在「应用」页点击「＋ 选择应用」，点选任意已安装应用\n" +
+                  "4. 下拉通知栏，点击授权通知上的「批准」，该应用即进入作用域\n" +
+                  "5. 打开该应用详情 → 点击「随机」或「自定义」生成伪装值并保存\n" +
+                  "6. 重新打开目标应用即按伪装身份生效；若仍读到旧值，保存后选择「清空所有数据」再打开",
+                  "1. First install: LSPosed/Vector -> Modules -> Enable this module (no need to tick System Framework or reboot)\n" +
+                  "2. Return here; you never need to open the framework manager again\n" +
+                  "3. On the Apps tab tap \"+ Select App\" and choose any installed app\n" +
+                  "4. Pull down the notification shade and tap Approve on the authorization notification; the app enters the scope\n" +
+                  "5. Open the app's detail -> tap Random / Customize to generate and save a spoofed identity\n" +
+                  "6. Reopen the target app and the identity applies; if it still reads old values, choose \"Clear all data\" after saving and reopen",
+                  "1. Первая установка: LSPosed/Vector -> Модули -> Включить модуль (отмечать «Системный фреймворк» и перезагружать не нужно)\n" +
+                  "2. Вернитесь сюда; открывать менеджер больше не нужно\n" +
+                  "3. На вкладке «Приложения» нажмите «+ Выбрать приложение» и выберите приложение\n" +
+                  "4. Опустите шторку уведомлений и нажмите «Одобрить»; приложение войдёт в область\n" +
+                  "5. Откройте детали приложения -> «Случайно»/«Настроить», создайте и сохраните идентичность\n" +
+                  "6. Перезапустите приложение; если читаются старые значения, выберите «Очистить все данные» и откройте заново"), d);
 
         addInfoBlock(ll, t("工作原理", "How It Works", "Как это работает"),
-                t("• 伪装身份保存在模块配置中，并在「保存/随机」时写入目标应用自己的私有目录（哨兵文件，应用可读）\n" +
-                  "• 模块经「系统框架」全局注入所有进程；目标应用启动时读到自己的哨兵身份即安装 Hook，未写入的应用零开销跳过\n" +
-                  "• 因此只有手动写入过伪装值的应用才生效（手动触发），无需在 LSPosed 中勾选目标应用\n" +
-                  "• 清除应用数据会删除哨兵 → 该应用恢复真实值，需重新写入",
+                t("• 在应用内点选目标并点通知上的「批准」后，框架直接把模块注入该目标应用进程（官方 libxposed service 权限）\n" +
+                  "• 伪装身份保存在模块配置中，并在「保存/随机」时写入目标应用自己的私有目录（哨兵文件，应用可读）\n" +
+                  "• 目标应用启动时读到自己的哨兵身份即安装 Hook；未被点选的应用完全不注入、零开销\n" +
+                  "• 蓝点 = 已生成伪装值；绿色「已注入✓」= 该应用已在作用域内\n" +
+                  "• 再点一次该应用可移除作用域；清除应用数据会删除哨兵，需重新写入",
+                  "• After you select a target in-app and tap Approve on the notification, the framework injects the module directly into that target app's process (official libxposed service permission)\n" +
                   "• The spoofed identity is stored in the module config and written to the target app's own private dir (sentinel file, readable by the app) on Save/Random\n" +
-                  "• The module injects every process via the System Framework; when a target app starts, it reads its own sentinel identity and installs hooks; apps without a sentinel are skipped with zero overhead\n" +
-                  "• So only apps you manually wrote a spoofed identity for are affected (manual trigger) — no need to check target apps in LSPosed\n" +
-                  "• Clearing app data deletes the sentinel -> the app returns to real values and needs a new write",
-                  "• Подменённая идентичность хранится в конфигурации модуля и при «Сохранить/Случайно» записывается в собственный приватный каталог приложения (файл-sentinel, читаемый приложением)\n" +
-                  "• Модуль внедряется во все процессы через «Системный фреймворк»; при запуске приложение читает свою идентичность-sentinel и устанавливает хуки; приложения без sentinel пропускаются без затрат\n" +
-                  "• Поэтому действуют только приложения, для которых вы вручную записали подменённую идентичность (ручной запуск) — отмечать их в LSPosed не нужно\n" +
-                  "• Очистка данных приложения удаляет sentinel -> приложение возвращается к реальным значениям, нужна новая запись"), d);
+                  "• When the target app starts it reads its own sentinel identity and installs hooks; apps not selected are never injected, zero overhead\n" +
+                  "• Blue dot = identity generated; green \"Injected✓\" = the app is in the scope\n" +
+                  "• Tap the app again to remove it; clearing app data deletes the sentinel and needs a new write",
+                  "• После выбора приложения и нажатия «Одобрить» в уведомлении фреймворк внедряет модуль прямо в процесс этого приложения (официальный libxposed service)\n" +
+                  "• Подменённая идентичность хранится в конфигурации модуля и при «Сохранить/Случайно» записывается в собственный каталог приложения (файл-sentinel)\n" +
+                  "• При запуске приложение читает свой sentinel и устанавливает хуки; невыбранные приложения не внедряются, нулевые затраты\n" +
+                  "• Синяя точка = идентичность создана; зелёное «Внедрён✓» = приложение в области\n" +
+                  "• Повторное нажатие убирает область; очистка данных удаляет sentinel, нужна новая запись"), d);
 
         addInfoBlock(ll, t("伪装的识别码", "Spoofed Identifiers", "Подменяемые идентификаторы"),
                 t("• Android ID (SSAID)\n• 广告ID (AAID) / AppSet ID\n• IMEI / MEID / IMSI / ICCID\n• 序列号 / MAC地址\n• GSF ID\n• 设备型号：品牌、型号、厂商、Build指纹\n• 运营商信息：代码、名称、国家",
@@ -1892,7 +2003,7 @@ public class MainActivity extends AppCompatActivity {
                 devInfo.append("Build ID: ").append(android.os.Build.ID).append("\n");
                 devInfo.append("Android Version: ").append(android.os.Build.VERSION.RELEASE).append("\n");
                 devInfo.append("SDK Level: ").append(android.os.Build.VERSION.SDK_INT).append("\n");
-                devInfo.append("Module Version: 3.9.6 (versionCode 68)\n");
+                devInfo.append("Module Version: 4.5.0 (versionCode 450)\n");
                 devInfo.append("Language: ").append(currentLang).append("\n");
                 // Root 状态
                 devInfo.append("\n=== Root Status ===\n");
@@ -2202,9 +2313,9 @@ public class MainActivity extends AppCompatActivity {
     private void showAboutDialog() {
         new AlertDialog.Builder(this)
                 .setTitle("DeviceResetSpooferX")
-                .setMessage(t("版本：3.9.6\n\n免开 LSPosed 管理器的设备伪装模块。\n\n在「应用」页添加目标 → 打开详情 →「随机」或「自定义」→ 保存（手动触发）→ 直接打开目标应用即生效。\n支持中文 / English / Русский",
-                        "Version: 3.9.6\n\nDevice spoofing module that works without opening the LSPosed Manager.\n\nAdd a target on the Apps tab -> open its detail -> Random / Customize -> Save (manual trigger) -> just reopen the app and it applies.\nSupports Chinese / English / Russian",
-                        "Версия: 3.9.6\n\nМодуль подмены устройства, работающий без открытия LSPosed Manager.\n\nДобавьте приложение на вкладке «Приложения» -> откройте детали -> «Случайно»/«Настроить» -> Сохранить (ручной запуск) -> просто откройте приложение снова, и оно применится.\nПоддерживает 中文 / English / Русский"))
+                .setMessage(t("版本：4.5.0\n\n免开框架管理器的设备伪装模块。\n\n在「应用」页点「＋选择应用」点选目标即自动写入作用域（root，几秒内生效，无需点通知）→ 打开详情「随机」或「自定义」→ 重新打开目标应用即生效；绿色「已注入✓」即已生效。\n支持中文 / English / Русский",
+                        "Version: 4.5.0\n\nDevice spoofing module that works without opening the framework manager.\n\nOn the Apps tab tap \"+ Select App\" and choose a target — the scope is written automatically (root, applies in a few seconds, no notification tap) -> open its detail, Random / Customize -> reopen the app; a green \"Injected✓\" means it is active.\nSupports Chinese / English / Russian",
+                        "Версия: 4.5.0\n\nМодуль подмены устройства, работающий без открытия менеджера фреймворка.\n\nНа вкладке «Приложения» нажмите «+ Выбрать приложение» — область записывается автоматически (root, применяется за несколько секунд, без нажатия на уведомление) -> откройте детали, «Случайно»/«Настроить» -> перезапустите приложение; зелёное «Внедрено✓» означает, что модуль активен.\nПоддерживает 中文 / English / Русский"))
                 .setPositiveButton(t("确定", "OK", "ОК"), null)
                 .show();
     }
@@ -2314,15 +2425,15 @@ public class MainActivity extends AppCompatActivity {
                 .setTitle(t("发现新版本 v", "New version v", "Доступна новая версия v") + latest)
                 .setMessage(t("检测到新版本，是否下载？", "New version detected. Download?", "Обнаружена новая версия. Скачать?"))
                 .setPositiveButton(t("下载", "Download", "Скачать"), (d, w) -> {
-                    // CI 打包命名：DeviceResetSpoofer-${tag}.apk
-                    String asset = "DeviceResetSpoofer-" + tag + ".apk";
+                    String asset = "DeviceResetSpooferX-v" + latest + ".apk";
                     String direct = "https://github.com/" + UPDATE_REPO + "/releases/download/" + tag + "/" + asset;
                     String[] mirrors = {"https://ghfast.top/", "https://gh-proxy.com/", "https://ghproxy.net/",
                             "https://mirror.ghproxy.com/", "https://github.moeyy.xyz/"};
                     String[] urls = new String[mirrors.length + 1];
                     for (int i = 0; i < mirrors.length; i++) urls[i] = mirrors[i] + direct;
                     urls[mirrors.length] = direct;
-                    AppDownloader.start(this, urls, REPO_HOME_URL, asset, latest, currentLang);
+                    AppDownloader.start(this, urls, REPO_HOME_URL,
+                            "DeviceResetSpooferX-v" + latest + ".apk", latest, currentLang);
                 })
                 .setNegativeButton(t("取消", "Cancel", "Отмена"), null)
                 .show();
