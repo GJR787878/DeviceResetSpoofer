@@ -134,6 +134,7 @@ public final class RootScopeManager {
                 "  [ -f \"$p\" ] && echo \"$p\" && break\n" +
                 "done";
         Result r = runRoot(script);
+        Log.i(TAG, "findDbPath: exit=" + r.exitCode + " output=" + r.output);
         if (r.ok() && !r.output.isEmpty()) {
             String p = r.output.split("\\n")[0].trim();
             if (!p.isEmpty() && p.contains("modules_config.db")) {
@@ -173,16 +174,20 @@ public final class RootScopeManager {
         String script =
                 "rm -rf '" + stageDir.getAbsolutePath() + "'\n" +
                 "mkdir -p '" + stageDir.getAbsolutePath() + "'\n" +
-                "cp '" + db + "' '" + SDB + "' 2>/dev/null\n" +
-                "[ -f '" + db + "-wal' ] && cp '" + db + "-wal' '" + SWAL + "' 2>/dev/null\n" +
-                "[ -f '" + db + "-shm' ] && cp '" + db + "-shm' '" + SSHM + "' 2>/dev/null\n" +
+                "cp '" + db + "' '" + SDB + "' 2>&1\n" +
+                "[ -f '" + db + "-wal' ] && cp '" + db + "-wal' '" + SWAL + "' 2>&1\n" +
+                "[ -f '" + db + "-shm' ] && cp '" + db + "-shm' '" + SSHM + "' 2>&1\n" +
                 "chmod 666 '" + SDB + "' 2>/dev/null\n" +
                 "[ -f '" + SWAL + "' ] && chmod 666 '" + SWAL + "' 2>/dev/null\n" +
-                "chown -R " + appUid + ":" + appUid + " '" + stageDir.getAbsolutePath() + "' 2>/dev/null\n" +
-                "restorecon -RF '" + stageDir.getAbsolutePath() + "' 2>/dev/null\n" +
+                "chown -R " + appUid + ":" + appUid + " '" + stageDir.getAbsolutePath() + "' 2>&1\n" +
+                "restorecon -RF '" + stageDir.getAbsolutePath() + "' 2>&1\n" +
+                "ls -la '" + stageDir.getAbsolutePath() + "'\n" +
                 "echo STAGED";
         Result r = runRoot(script);
-        return r.output.contains("STAGED") && stageDb.exists() && stageDb.canRead();
+        Log.i(TAG, "stageFromDevice: exit=" + r.exitCode + " output=" + r.output);
+        boolean ok = r.output.contains("STAGED") && stageDb.exists() && stageDb.canRead();
+        Log.i(TAG, "stageFromDevice: ok=" + ok + " exists=" + stageDb.exists() + " canRead=" + stageDb.canRead());
+        return ok;
     }
 
     // ============================== 读取作用域 ==============================
@@ -190,21 +195,30 @@ public final class RootScopeManager {
     /** 读取本模块当前作用域包名集合。失败返回 null。 */
     public Set<String> readScope() {
         String db = findDbPath();
-        if (db == null) return null;
-        if (!stageFromDevice(db)) return null;
+        Log.i(TAG, "readScope: dbPath=" + db);
+        if (db == null) { Log.e(TAG, "readScope: db not found"); return null; }
+        if (!stageFromDevice(db)) { Log.e(TAG, "readScope: stageFromDevice failed"); return null; }
         Set<String> scope = new LinkedHashSet<>();
         SQLiteDatabase sql = null;
         try {
+            // 打开前删除残留 WAL/SHM，强制 checkpoint 到主库（避免 WAL 不完整导致打开失败）
+            runRoot("rm -f '" + SWAL + "' '" + SSHM + "' 2>/dev/null");
             sql = SQLiteDatabase.openDatabase(SDB, null, SQLiteDatabase.OPEN_READWRITE);
             Long mid = getModuleMid(sql);
-            if (mid == null) return scope;
+            Log.i(TAG, "readScope: mid=" + mid);
+            if (mid == null) {
+                // 模块未在管理器启用：返回空集合（非 null），调用方据此走 rootMode 并在 syncScope 时自动启用
+                Log.i(TAG, "readScope: module not in modules table, returning empty set (rootMode will auto-enable)");
+                return scope;
+            }
             try (Cursor c = sql.rawQuery(
                     "SELECT app_pkg_name FROM scope WHERE mid=? AND user_id=?",
                     new String[]{String.valueOf(mid), String.valueOf(USER_ID)})) {
                 while (c.moveToNext()) scope.add(c.getString(0));
             }
+            Log.i(TAG, "readScope: found " + scope.size() + " scope entries");
         } catch (Throwable t) {
-            Log.e(TAG, "readScope", t);
+            Log.e(TAG, "readScope failed", t);
             return null;
         } finally {
             if (sql != null) try { sql.close(); } catch (Throwable ignored) {}
