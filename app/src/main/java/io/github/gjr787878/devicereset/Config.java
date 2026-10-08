@@ -105,20 +105,63 @@ public class Config {
                     db.close();
                     return;
                 }
-                db.execSQL("INSERT OR REPLACE INTO scope (module_pkg_name, app_pkg_name, user_id) VALUES (?, ?, 0)",
-                        new Object[]{MODULE_PKG, "system"});
-                db.execSQL("INSERT OR REPLACE INTO scope (module_pkg_name, app_pkg_name, user_id) VALUES (?, ?, 0)",
-                        new Object[]{MODULE_PKG, "android"});
-                db.execSQL("INSERT OR REPLACE INTO scope (module_pkg_name, app_pkg_name, user_id) VALUES (?, ?, 0)",
-                        new Object[]{MODULE_PKG, MODULE_PKG});
-                int n = 0;
-                for (String p : targets) {
-                    if (p == null || p.isEmpty() || MODULE_PKG.equals(p)) continue;
+                // 检测表结构：新版 Vector/LSPosed 用 modules(mid) + scope(mid, app_pkg_name)
+                // 旧版用 modules_state + scope(module_pkg_name, app_pkg_name)
+                boolean newSchema = tables.contains("modules");
+                if (newSchema) {
+                    // 新版：先查 mid，不存在则插入 modules 表
+                    int mid = -1;
+                    android.database.Cursor mc = db.rawQuery(
+                            "SELECT mid FROM modules WHERE module_pkg_name=? LIMIT 1",
+                            new String[]{MODULE_PKG});
+                    if (mc.moveToFirst()) mid = mc.getInt(0);
+                    mc.close();
+                    if (mid < 0) {
+                        // 模块未在 LSPosed 启用，插入 modules 表并启用
+                        db.execSQL("INSERT OR IGNORE INTO modules (module_pkg_name, apk_path, enabled, auto_include) VALUES (?, ?, 1, 0)",
+                                new Object[]{MODULE_PKG, ctx.getPackageCodePath()});
+                        mc = db.rawQuery("SELECT mid FROM modules WHERE module_pkg_name=? LIMIT 1",
+                                new String[]{MODULE_PKG});
+                        if (mc.moveToFirst()) mid = mc.getInt(0);
+                        mc.close();
+                    }
+                    log.append("new schema: mid=").append(mid).append("\n");
+                    if (mid >= 0) {
+                        // 确保模块启用
+                        db.execSQL("UPDATE modules SET enabled=1 WHERE mid=?", new Object[]{mid});
+                        // 写入 scope：system + android + self + targets
+                        db.execSQL("INSERT OR IGNORE INTO scope (mid, app_pkg_name, user_id) VALUES (?, ?, 0)",
+                                new Object[]{mid, "system"});
+                        db.execSQL("INSERT OR IGNORE INTO scope (mid, app_pkg_name, user_id) VALUES (?, ?, 0)",
+                                new Object[]{mid, "android"});
+                        db.execSQL("INSERT OR IGNORE INTO scope (mid, app_pkg_name, user_id) VALUES (?, ?, 0)",
+                                new Object[]{mid, MODULE_PKG});
+                        int n = 0;
+                        for (String p : targets) {
+                            if (p == null || p.isEmpty() || MODULE_PKG.equals(p)) continue;
+                            db.execSQL("INSERT OR IGNORE INTO scope (mid, app_pkg_name, user_id) VALUES (?, ?, 0)",
+                                    new Object[]{mid, p});
+                            n++;
+                        }
+                        log.append("new schema scope rows: system/android/self + ").append(n).append(" targets\n");
+                    }
+                } else {
+                    // 旧版表结构
                     db.execSQL("INSERT OR REPLACE INTO scope (module_pkg_name, app_pkg_name, user_id) VALUES (?, ?, 0)",
-                            new Object[]{MODULE_PKG, p});
-                    n++;
+                            new Object[]{MODULE_PKG, "system"});
+                    db.execSQL("INSERT OR REPLACE INTO scope (module_pkg_name, app_pkg_name, user_id) VALUES (?, ?, 0)",
+                            new Object[]{MODULE_PKG, "android"});
+                    db.execSQL("INSERT OR REPLACE INTO scope (module_pkg_name, app_pkg_name, user_id) VALUES (?, ?, 0)",
+                            new Object[]{MODULE_PKG, MODULE_PKG});
+                    int n = 0;
+                    for (String p : targets) {
+                        if (p == null || p.isEmpty() || MODULE_PKG.equals(p)) continue;
+                        db.execSQL("INSERT OR REPLACE INTO scope (module_pkg_name, app_pkg_name, user_id) VALUES (?, ?, 0)",
+                                new Object[]{MODULE_PKG, p});
+                        n++;
+                    }
+                    log.append("old schema scope rows: system/android/self + ").append(n).append(" targets\n");
                 }
-                log.append("scope rows inserted: system/android/self + ").append(n).append(" targets\n");
             } finally {
                 db.close(); // close = checkpoint WAL 到主库
             }
@@ -187,19 +230,60 @@ public class Config {
             SQLiteDatabase db = SQLiteDatabase.openDatabase(localDb.getAbsolutePath(), null,
                     SQLiteDatabase.OPEN_READONLY);
             try {
-                android.database.Cursor c = db.rawQuery(
-                        "SELECT enabled FROM modules_state WHERE module_pkg_name=? AND user_id=0", new String[]{MODULE_PKG});
-                if (c.moveToFirst()) st.enabled = c.getInt(0) == 1;
-                c.close();
-                c = db.rawQuery("SELECT app_pkg_name FROM scope WHERE module_pkg_name=?", new String[]{MODULE_PKG});
-                while (c.moveToNext()) {
-                    String p = c.getString(0);
-                    if (MODULE_PKG.equals(p)) st.hasSelf = true;
-                    else if ("system".equals(p)) st.hasSystem = true;
-                    else if (!"android".equals(p)) st.targets.add(p);
+                // 检测表结构：新版有 modules 表，旧版有 modules_state 表
+                boolean hasModules = false;
+                boolean hasModulesState = false;
+                android.database.Cursor tc = db.rawQuery(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('modules','modules_state')", null);
+                while (tc.moveToNext()) {
+                    String n = tc.getString(0);
+                    if ("modules".equals(n)) hasModules = true;
+                    if ("modules_state".equals(n)) hasModulesState = true;
                 }
-                c.close();
-                st.dbOk = true;
+                tc.close();
+
+                if (hasModules) {
+                    // 新版 Vector/LSPosed: modules(mid, module_pkg_name, enabled) + scope(mid, app_pkg_name, user_id)
+                    android.database.Cursor c = db.rawQuery(
+                            "SELECT mid, enabled FROM modules WHERE module_pkg_name=? LIMIT 1",
+                            new String[]{MODULE_PKG});
+                    int mid = -1;
+                    if (c.moveToFirst()) {
+                        mid = c.getInt(0);
+                        st.enabled = c.getInt(1) == 1;
+                    }
+                    c.close();
+                    if (mid >= 0) {
+                        c = db.rawQuery(
+                                "SELECT app_pkg_name FROM scope WHERE mid=? AND user_id=0",
+                                new String[]{String.valueOf(mid)});
+                        while (c.moveToNext()) {
+                            String p = c.getString(0);
+                            if (MODULE_PKG.equals(p)) st.hasSelf = true;
+                            else if ("system".equals(p) || "android".equals(p)) st.hasSystem = true;
+                            else st.targets.add(p);
+                        }
+                        c.close();
+                    }
+                    st.dbOk = true;
+                } else if (hasModulesState) {
+                    // 旧版 LSPosed: modules_state + scope(module_pkg_name)
+                    android.database.Cursor c = db.rawQuery(
+                            "SELECT enabled FROM modules_state WHERE module_pkg_name=? AND user_id=0",
+                            new String[]{MODULE_PKG});
+                    if (c.moveToFirst()) st.enabled = c.getInt(0) == 1;
+                    c.close();
+                    c = db.rawQuery("SELECT app_pkg_name FROM scope WHERE module_pkg_name=?",
+                            new String[]{MODULE_PKG});
+                    while (c.moveToNext()) {
+                        String p = c.getString(0);
+                        if (MODULE_PKG.equals(p)) st.hasSelf = true;
+                        else if ("system".equals(p)) st.hasSystem = true;
+                        else if (!"android".equals(p)) st.targets.add(p);
+                    }
+                    c.close();
+                    st.dbOk = true;
+                }
             } finally {
                 db.close();
             }
