@@ -298,8 +298,9 @@ public final class RootScopeManager {
         fullScope.add("android");
         Log.i(TAG, "syncScope: targets=" + targetPkgs.size() + " + system/android = " + fullScope.size());
 
-        killDaemon();
-        if (!stageFromDevice(db)) { restartDaemon(); return false; }
+        // 不 kill 守护进程！kill 后 restart 经常失败导致 DeadObjectException、系统框架注入失败。
+        // LSPosed 守护进程有 inotify 监听数据库变化，直接改库+touch 即可触发重新加载。
+        if (!stageFromDevice(db)) return false;
 
         boolean edited;
         SQLiteDatabase sql = null;
@@ -369,13 +370,15 @@ public final class RootScopeManager {
                 "chmod 660 '" + db + "' 2>/dev/null\n" +
                 "chown root:root '" + db + "' 2>/dev/null\n" +
                 "restorecon -F '" + db + "' 2>/dev/null\n" +
+                "touch '" + db + "'\n" +  // 触发守护进程 inotify 重新加载
                 "echo BACK_OK";
         Result back = runRoot(copyBack);
         cleanupStage();
 
-        boolean restarted = restartDaemon();
-        Log.i(TAG, "syncScope: edited=" + edited + " backOk=" + back.output.contains("BACK_OK") + " restarted=" + restarted);
-        return edited && back.output.contains("BACK_OK") && restarted;
+        // 不重启守护进程！避免 DeadObjectException。守护进程通过 inotify 感知数据库变化。
+        boolean backOk = back.output.contains("BACK_OK");
+        Log.i(TAG, "syncScope: edited=" + edited + " backOk=" + backOk);
+        return edited && backOk;
     }
 
     private void cleanupStage() {
