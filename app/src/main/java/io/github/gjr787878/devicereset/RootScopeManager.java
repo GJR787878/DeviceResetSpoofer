@@ -299,7 +299,9 @@ public final class RootScopeManager {
         Log.i(TAG, "syncScope: targets=" + targetPkgs.size() + " + system/android = " + fullScope.size());
 
         // 不 kill 守护进程！kill 后 restart 经常失败导致 DeadObjectException、系统框架注入失败。
-        // LSPosed 守护进程有 inotify 监听数据库变化，直接改库+touch 即可触发重新加载。
+        // 只在守护进程已死时安全启动它（无旧进程可 kill，不会触发 DeadObjectException）。
+        // LSPosed 守护进程有 FileObserver 监听数据库变化，直接改库+touch 即可触发重新加载。
+        ensureDaemon();
         if (!stageFromDevice(db)) return false;
 
         boolean edited;
@@ -387,7 +389,44 @@ public final class RootScopeManager {
 
     // ============================== 守护进程 / 目标应用 ==============================
 
-    /** 停止 lspd 守护进程（轮询确认退出，最多约 3 秒）。 */
+    /** 检测 lspd 守护进程是否存活。 */
+    public boolean isDaemonAlive() {
+        Result r = runRoot("pidof lspd >/dev/null 2>&1 && echo ALIVE || echo DEAD");
+        return r.output.contains("ALIVE");
+    }
+
+    /**
+     * 确保守护进程存活：如果已死，安全启动（不 kill 旧进程，避免 DeadObjectException）。
+     * 如果已存活，什么都不做。
+     */
+    public boolean ensureDaemon() {
+        if (isDaemonAlive()) {
+            Log.i(TAG, "ensureDaemon: already alive");
+            return true;
+        }
+        Log.w(TAG, "ensureDaemon: daemon dead, starting...");
+        String dir = findModuleDir();
+        if (dir == null) { Log.e(TAG, "ensureDaemon: module dir not found"); return false; }
+        String sh = dir + "service.sh";
+        String busybox = "/data/adb/magisk/busybox";
+        String shell = "export PATH=/data/adb/magisk:/system/bin:/system/xbin:$PATH; " +
+                "[ -x " + busybox + " ] && BB=\"" + busybox + "\" || BB=sh; " +
+                "export ASH_STANDALONE=1; " +
+                "$BB sh '" + sh + "' --system-server-max-retry=-1; " +
+                "i=0; " +
+                "until pidof lspd >/dev/null 2>&1; do " +
+                "  i=$((i+1)); [ $i -ge 40 ] && break; " +
+                "  sleep 0.2; " +
+                "done; " +
+                "(pidof lspd >/dev/null && echo DAEMON_UP) || echo DAEMON_DOWN";
+        Result r = runRoot(shell);
+        boolean up = r.output.contains("DAEMON_UP");
+        Log.i(TAG, "ensureDaemon: " + (up ? "started" : "FAILED") + " output=" + r.output);
+        return up;
+    }
+
+    /** 停止 lspd 守护进程（轮询确认退出，最多约 3 秒）。已废弃，仅保留兼容。 */
+    @Deprecated
     public void killDaemon() {
         runRoot(
                 "killall lspd 2>/dev/null\n" +
