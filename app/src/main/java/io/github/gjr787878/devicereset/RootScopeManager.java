@@ -286,10 +286,17 @@ public final class RootScopeManager {
     /**
      * 把本模块作用域全量同步为 {@code targetPkgs}，并确保模块已启用；随后重启守护进程。
      * 兼容新版(mid schema)和旧版(module_pkg_name schema)两种表结构。
+     * 内部自动确保 system 和 android 始终在作用域中（系统框架注入的前提）。
      */
     public boolean syncScope(Set<String> targetPkgs) {
         String db = findDbPath();
         if (db == null) { Log.e(TAG, "db not found"); return false; }
+
+        // 确保 system 和 android 始终在作用域中（否则系统框架注入失败）
+        Set<String> fullScope = new LinkedHashSet<>(targetPkgs);
+        fullScope.add("system");
+        fullScope.add("android");
+        Log.i(TAG, "syncScope: targets=" + targetPkgs.size() + " + system/android = " + fullScope.size());
 
         killDaemon();
         if (!stageFromDevice(db)) { restartDaemon(); return false; }
@@ -299,7 +306,7 @@ public final class RootScopeManager {
         try {
             sql = SQLiteDatabase.openDatabase(SDB, null, SQLiteDatabase.OPEN_READWRITE);
             int schema = detectSchema(sql);
-            Log.i(TAG, "syncScope: schema=" + schema + ", targets=" + targetPkgs.size());
+            Log.i(TAG, "syncScope: schema=" + schema + ", fullScope=" + fullScope.size());
             sql.beginTransaction();
             try {
                 String apk = context.getPackageManager()
@@ -319,7 +326,7 @@ public final class RootScopeManager {
                     if (mid == null) throw new IllegalStateException("no mid after insert");
                     sql.execSQL("DELETE FROM scope WHERE mid=? AND user_id=?",
                             new Object[]{mid, USER_ID});
-                    for (String pkg : targetPkgs) {
+                    for (String pkg : fullScope) {
                         if (pkg == null || pkg.isEmpty()) continue;
                         sql.execSQL("INSERT INTO scope (mid, app_pkg_name, user_id) VALUES (?,?,?)",
                                 new Object[]{mid, pkg, USER_ID});
@@ -335,7 +342,7 @@ public final class RootScopeManager {
                     // scope: 全量替换该模块的主用户作用域
                     sql.execSQL("DELETE FROM scope WHERE module_pkg_name=? AND user_id=?",
                             new Object[]{MODULE_PKG, USER_ID});
-                    for (String pkg : targetPkgs) {
+                    for (String pkg : fullScope) {
                         if (pkg == null || pkg.isEmpty()) continue;
                         sql.execSQL(
                                 "INSERT INTO scope (module_pkg_name, app_pkg_name, user_id) VALUES (?,?,?)",
