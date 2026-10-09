@@ -111,8 +111,9 @@ public class MainActivity extends AppCompatActivity {
      *  同时 root 读 LSPosed 配置库真实状态（libxposed service 未连接时兜底显示真实注入状态） */
     private void refreshScopeStatus() {
         new Thread(() -> {
-            // 1) 首选 root：直读作用域库（权威），用于“勾上即生效、零点击”
+            // 1) 首选 root：直读作用域库（权威），用于"勾上即生效、零点击"
             boolean root = rootScope.isRootAvailable();
+            if (root) rootScope.ensureDaemon(); // 启动时确保守护进程存活（已死则安全启动）
             java.util.Set<String> rootScopeSet = root ? rootScope.readScope() : null;
             if (rootScopeSet != null) {
                 rootMode = true;
@@ -127,10 +128,11 @@ public class MainActivity extends AppCompatActivity {
             }
             // 2) libxposed service（无 root 时的现代框架路径）
             scopeConnected = LSPosedScopeHelper.isConnected();
-            java.util.L            // 1) 首选 root：直读作用域库（权威），用于"勾上即生效、零点击"
-            boolean root = rootScope.isRootAvailable();
-            if (root) rootScope.ensureDaemon(); // 启动时确保守护进程存活（已死则安全启动）
-            java.util.Set<String> rootScopeSet = root ? rootScope.readScope() : null;
+            java.util.List<String> sc = LSPosedScopeHelper.getScope();
+            synchronized (scopeCache) {
+                scopeCache.clear();
+                if (sc != null) scopeCache.addAll(sc);
+            }
             scopeLoaded = true;
             // 3) root 读 db 兜底（非 rootMode 时用旧的只读方式）
             if (!rootMode) {
