@@ -1216,9 +1216,9 @@ public class MainActivity extends AppCompatActivity {
                     Config.getTargetPackages(this));
             // 进度提示
             final android.app.ProgressDialog pd = new android.app.ProgressDialog(this);
-            pd.setMessage(t("正在应用作用域（重启框架服务）…",
-                    "Applying scope (restarting framework service)…",
-                    "Применение области (перезапуск службы фреймворка)…"));
+            pd.setMessage(t("正在写入作用域并应用…",
+                    "Writing scope and applying…",
+                    "Запись области и применение…"));
             pd.setCancelable(false);
             pd.show();
             pickerApplying = true;
@@ -2004,7 +2004,7 @@ public class MainActivity extends AppCompatActivity {
                 devInfo.append("Build ID: ").append(android.os.Build.ID).append("\n");
                 devInfo.append("Android Version: ").append(android.os.Build.VERSION.RELEASE).append("\n");
                 devInfo.append("SDK Level: ").append(android.os.Build.VERSION.SDK_INT).append("\n");
-                devInfo.append("Module Version: 4.5.7 (versionCode 457)\n");
+                devInfo.append("Module Version: 4.5.8 (versionCode 458)\n");
                 devInfo.append("Language: ").append(currentLang).append("\n");
                 // Root 状态
                 devInfo.append("\n=== Root Status ===\n");
@@ -2314,9 +2314,9 @@ public class MainActivity extends AppCompatActivity {
     private void showAboutDialog() {
         new AlertDialog.Builder(this)
                 .setTitle("DeviceResetSpooferX")
-                .setMessage(t("版本：4.5.7\n\n免开框架管理器的设备伪装模块。\n\n在「应用」页点「＋选择应用」点选目标即自动写入作用域（root，几秒内生效，无需点通知）→ 打开详情「随机」或「自定义」→ 重新打开目标应用即生效；绿色「已注入✓」即已生效。\n支持中文 / English / Русский",
-                        "Version: 4.5.7\n\nDevice spoofing module that works without opening the framework manager.\n\nOn the Apps tab tap \"+ Select App\" and choose a target — the scope is written automatically (root, applies in a few seconds, no notification tap) -> open its detail, Random / Customize -> reopen the app; a green \"Injected✓\" means it is active.\nSupports Chinese / English / Russian",
-                        "Версия: 4.5.7\n\nМодуль подмены устройства, работающий без открытия менеджера фреймворка.\n\nНа вкладке «Приложения» нажмите «+ Выбрать приложение» — область записывается автоматически (root, применяется за несколько секунд, без нажатия на уведомление) -> откройте детали, «Случайно»/«Настроить» -> перезапустите приложение; зелёное «Внедрено✓» означает, что модуль активен.\nПоддерживает 中文 / English / Русский"))
+                .setMessage(t("版本：4.5.8\n\n免开框架管理器的设备伪装模块。\n\n在「应用」页点「＋选择应用」点选目标即自动写入作用域（root，几秒内生效，无需点通知）→ 打开详情「随机」或「自定义」→ 重新打开目标应用即生效；绿色「已注入✓」即已生效。\n支持中文 / English / Русский",
+                        "Version: 4.5.8\n\nDevice spoofing module that works without opening the framework manager.\n\nOn the Apps tab tap \"+ Select App\" and choose a target — the scope is written automatically (root, applies in a few seconds, no notification tap) -> open its detail, Random / Customize -> reopen the app; a green \"Injected✓\" means it is active.\nSupports Chinese / English / Russian",
+                        "Версия: 4.5.8\n\nМодуль подмены устройства, работающий без открытия менеджера фреймворка.\n\nНа вкладке «Приложения» нажмите «+ Выбрать приложение» — область записывается автоматически (root, применяется за несколько секунд, без нажатия на уведомление) -> откройте детали, «Случайно»/«Настроить» -> перезапустите приложение; зелёное «Внедрено✓» означает, что модуль активен.\nПоддерживает 中文 / English / Русский"))
                 .setPositiveButton(t("确定", "OK", "ОК"), null)
                 .show();
     }

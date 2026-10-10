@@ -169,18 +169,22 @@ public final class RootScopeManager {
         return null;
     }
 
-    /** 定位框架 magisk 模块目录（含 daemon、lspctl 与 service.sh），用于重启守护进程。 */
+    /**
+     * 定位框架 magisk 模块目录（含 daemon 启动脚本，以及 {@code cli}（Vector release）或
+     * {@code lspctl}（旧 LSPosed）CLI），用于写入作用域 / 重启守护进程。
+     */
     public String findModuleDir() {
         if (moduleDirCached != null) return moduleDirCached;
+        // 目录内只要有 daemon 且 (cli 或 lspctl) 即视为框架模块目录
         String script =
                 "for d in /data/adb/modules/*/ /data/adb/modules_update/*/; do\n" +
-                "  if [ -f \"$d/daemon\" ] && [ -f \"$d/lspctl\" ]; then\n" +
-                "    case \"$d\" in *lsposed*|*lspd*|*vector*) echo \"$d\"; break;; esac\n" +
+                "  if [ -f \"$d/daemon\" ] && { [ -f \"$d/cli\" ] || [ -f \"$d/lspctl\" ]; }; then\n" +
+                "    case \"$d\" in *vector*|*lsposed*|*lspd*) echo \"$d\"; break;; esac\n" +
                 "  fi\n" +
                 "done\n" +
                 "if [ -z \"$moduleDir\" ]; then\n" +
                 "  for d in /data/adb/modules/*/; do\n" +
-                "    [ -f \"$d/daemon\" ] && [ -f \"$d/lspctl\" ] && { echo \"$d\"; break; }\n" +
+                "    [ -f \"$d/daemon\" ] && { [ -f \"$d/cli\" ] || [ -f \"$d/lspctl\" ]; } && { echo \"$d\"; break; }\n" +
                 "  done\n" +
                 "fi";
         Result r = runRoot(script);
@@ -265,13 +269,25 @@ public final class RootScopeManager {
             if (schema == 2) {
                 Long mid = getModuleMidV2(sql);
                 Log.i(TAG, "readScope: mid=" + mid);
-                if (mid == null) return scope; // 模块未启用，返回空集合
+                if (mid == null) return scope; // 模块未注册，返回空集合
+                // 模块被禁用（如取消全部目标）则视为无作用域
+                try (Cursor e = sql.rawQuery(
+                        "SELECT enabled FROM modules WHERE mid=?",
+                        new String[]{String.valueOf(mid)})) {
+                    if (e.moveToFirst() && e.getInt(0) == 0) return scope;
+                }
                 try (Cursor c = sql.rawQuery(
                         "SELECT app_pkg_name FROM scope WHERE mid=? AND user_id=?",
                         new String[]{String.valueOf(mid), String.valueOf(USER_ID)})) {
                     while (c.moveToNext()) scope.add(c.getString(0));
                 }
             } else if (schema == 1) {
+                // 模块被禁用（modules_state.enabled=0，如取消全部目标）则视为无作用域
+                try (Cursor e = sql.rawQuery(
+                        "SELECT enabled FROM modules_state WHERE module_pkg_name=? AND user_id=?",
+                        new String[]{MODULE_PKG, String.valueOf(USER_ID)})) {
+                    if (!e.moveToFirst() || e.getInt(0) == 0) return scope;
+                }
                 try (Cursor c = sql.rawQuery(
                         "SELECT app_pkg_name FROM scope WHERE module_pkg_name=? AND user_id=?",
                         new String[]{MODULE_PKG, String.valueOf(USER_ID)})) {
@@ -304,25 +320,42 @@ public final class RootScopeManager {
     // ============================== 写入作用域（全量同步） ==============================
 
     /**
-     * 把本模块作用域全量同步为 {@code targetPkgs}，并确保模块已启用；
-     * 随后<b>重启守护进程</b>（这是让内存缓存重建、改动真正生效的必要步骤）。
-     * 兼容新版(mid schema)和旧版(module_pkg_name schema)两种表结构。
-     * 内部自动确保 system 和 android 始终在作用域中（系统框架注入的前提）。
-     * 返回 true 仅当：库已改对 + 守护进程已重启并经 lspctl 验证就绪。
+     * 把本模块作用域全量同步为 {@code targetPkgs}，并确保模块已启用。两条路径：
+     * <ol>
+     *   <li><b>首选 Vector release 的 {@code cli}</b>：root 调用模块自带 CLI（编译期令牌鉴权，
+     *       无开发者模式 / 无 ADB 来源门），由<b>守护进程在自己的内存空间里写库并
+     *       ConfigCache.requestCacheUpdate() 刷新缓存</b> —— 无需重启守护进程、无“部分激活”、
+     *       即时生效。</li>
+     *   <li><b>兜底旧 LSPosed（lspctl）</b>：lspctl 的写作用域命令被开发者模式 +
+     *       CliOriginVerifier（需 adbd 祖先 + ADB tty）挡住，App 无法使用，只能直写库后
+     *       setsid 重启守护进程。</li>
+     * </ol>
+     * 取消勾选：普通取消由 scope 全量覆盖完成；若一个目标都不剩，则禁用模块（scope 行保留，
+     * 下次勾选经 scope set 自动重新启用）。
      */
     public boolean syncScope(Set<String> targetPkgs) {
-        String db = findDbPath();
-        if (db == null) { Log.e(TAG, "syncScope: db not found"); return false; }
         String modDir = findModuleDir();
         if (modDir == null) { Log.e(TAG, "syncScope: module dir not found"); return false; }
 
-        // 确保 system 和 android 始终在作用域中（否则系统框架注入失败）
+        // ---- 首选：cli（守护进程内部处理，零重启）----
+        String cli = locateCli(modDir);
+        if (cli != null) {
+            boolean ok = applyViaCli(cli, targetPkgs);
+            Log.i(TAG, "syncScope via cli: " + ok + ", targets="
+                    + (targetPkgs == null ? 0 : targetPkgs.size()));
+            return ok;
+        }
+
+        // ---- 兜底：旧 lsposed 直写库 + 重启守护进程 ----
+        String db = findDbPath();
+        if (db == null) { Log.e(TAG, "syncScope: db not found"); return false; }
+        Log.i(TAG, "syncScope via direct-write+restart (legacy lspctl framework)");
+
+        // 旧路径强制保留 system/android（旧框架系统注入的前提）
         Set<String> fullScope = new LinkedHashSet<>();
         fullScope.add("system");
         fullScope.add("android");
         if (targetPkgs != null) fullScope.addAll(targetPkgs);
-        Log.i(TAG, "syncScope: targets=" + (targetPkgs==null?0:targetPkgs.size())
-                + " + system/android = " + fullScope.size());
 
         if (!stageFromDevice(db)) return false;
 
@@ -403,6 +436,45 @@ public final class RootScopeManager {
         cleanupStage();
         Log.i(TAG, "syncScope: edited=true restarted=" + restarted);
         return restarted;
+    }
+
+    /**
+     * 定位可用的 cli 可执行脚本：优先守护进程启动时拷贝到 /data/adb/lspd/cli 的副本，
+     * 其次模块目录内的 cli；都不存在（旧 lspctl 框架）返回 null。
+     */
+    private String locateCli(String modDir) {
+        Result r = runRoot(
+                "for c in /data/adb/lspd/cli '" + modDir + "cli'; do\n" +
+                "  [ -x \"$c\" ] && { echo \"$c\"; break; }\n" +
+                "done");
+        if (r.ok() && !r.output.isEmpty()) {
+            String c = r.output.split("\\n")[0].trim();
+            if (!c.isEmpty()) return c;
+        }
+        return null;
+    }
+
+    /**
+     * 经 cli 写入作用域（root）。{@code --json} 输出 CliResponse，以其中 success 字段判定。
+     * 无目标时禁用模块；有目标时 scope set（内部会 enableModule + 全量覆盖 scope + 刷缓存）。
+     */
+    private boolean applyViaCli(String cli, Set<String> targets) {
+        int n = targets == null ? 0 : targets.size();
+        String script;
+        if (n == 0) {
+            script = "'" + cli + "' --json modules disable '" + MODULE_PKG + "' 2>&1";
+        } else {
+            StringBuilder args = new StringBuilder();
+            for (String p : targets) {
+                if (p == null || p.isEmpty()) continue;
+                args.append(" '").append(p).append("/0'");
+            }
+            script = "'" + cli + "' --json scope set '" + MODULE_PKG + "'" + args + " 2>&1";
+        }
+        Result r = runRoot(script);
+        Log.i(TAG, "applyViaCli: exit=" + r.exitCode + " output=" + r.output);
+        // gson pretty print 含空格，去空白后匹配 "success":true
+        return r.ok() && r.output.replaceAll("\\s+", "").contains("\"success\":true");
     }
 
     /**
