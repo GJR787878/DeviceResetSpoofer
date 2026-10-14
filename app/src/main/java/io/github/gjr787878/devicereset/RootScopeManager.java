@@ -13,68 +13,45 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 
 /**
- * Root 作用域直写管理器（零点击生效）。
+ * Root 作用域直写管理器（零点击生效）。由 {@link FrameworkDetector} 精确判定当前框架分支后，
+ * 自动选择对应方案：
  *
- * <p>在已授予 root 的设备上，无需打开 LSPosed/Vector 管理器、也无需在通知上点“批准”，
- * 直接把目标应用写入框架的作用域数据库 {@code modules_config.db}，随后<b>重启 lspd 守护进程</b>
- * 使其丢弃旧的内存 ConfigCache、从数据库重建作用域，再强制停止目标应用 ——
- * 实现“勾上即生效、零点击”。</p>
- *
- * <p><b>为什么必须重启守护进程（已用设备数据证实）</b>：</p>
  * <ul>
- *   <li>守护进程（反编译 j7 / b9）把作用域缓存在内存（{@code j7.s} ConfigCache）。
- *       zygote fork 普通应用时，注入侧通过 socket 字节 4 向守护进程查询模块列表，
- *       结果直接来自<b>内存缓存</b>而非数据库。</li>
- *   <li>守护进程内<b>不存在 FileObserver</b>（全量反编译检索证实），直接改库不会触发
- *       内存缓存重建 —— 这是此前“库已写对、但应用仍未注入、没有任何改进”的根因。</li>
- *   <li>框架自身的实时生效路径（CLI 字节 5 → j7.E：写库 + I(false) 刷缓存 + u8.p 杀进程）
- *       被两道门挡住：开发者模式（需管理器设置）+ CliOriginVerifier（z1.b，要求调用进程
- *       祖先链含 adbd、且有 ADB tty）。App 经 su 无人值守调用无法通过，故只能走
- *       “直写 + 重启守护进程”。</li>
+ *   <li><b>Vector（JingMatrix）</b>：root 直接调用模块自带 {@code cli}（编译期令牌鉴权，无
+ *       ADB 来源门），由守护进程在自己内存里写库 + 刷 ConfigCache，<b>无需重启、即时生效</b>。</li>
+ *   <li><b>官方 LSPosed</b>：{@code lspctl} 的写作用域命令被开发者模式 + CliOriginVerifier
+ *       （{@code z1.b}，要求调用进程祖先链含 adbd 且有 ADB 连接）挡住，App 无人值守无法通过，
+ *       只能直写库后重启守护进程。重启严格复刻官方 {@code service.sh} 的
+ *       {@code daemon --force}，就绪轮询放宽到约 90 秒（覆盖首次 dex2oat），并在失败时
+ *       自动恢复旧库、重新拉起，<b>绝不把框架留在半激活状态</b>。</li>
  * </ul>
  *
- * <p><b>如何避免“框架未完全激活/部分激活”</b>：</p>
- * <ul>
- *   <li>旧实现的问题：killall lspd 后经 service.sh 拉起的新进程<b>未正确脱离 su 会话</b>，
- *       su 会话结束即被带走 → 守护进程长时间缺失 → 管理器持续报“部分激活”。</li>
- *   <li>本实现用 {@code setsid} 把新守护进程放进独立会话（stdio 全重定向到 /dev/null），
- *       不随 su 会话死亡；启动后用框架自带 {@code lspctl status} 轮询直到守护进程真正就绪，
- *       再返回成功。守护进程启动时会通过 j1.a 主动向 system_server 注入侧（activity 服务）
- *       重新注册，system_server 链路随重启自动恢复。</li>
- * </ul>
+ * <p>作用域中系统框架只写 {@code system}（加载时 packageName 才是 {@code android}），
+ * 不再写冗余的 {@code android} 行。只操作本模块自己的行，其他模块完全不受影响。</p>
  *
- * <p><b>其他要点</b>：</p>
- * <ul>
- *   <li>暂存目录放在模块私有 filesDir（root 拷出后 chown 回本应用 uid、restorecon）；
- *       不依赖设备 sqlite3：root 拷出 → 应用内 SQLite 改 → root 拷回。</li>
- *   <li>打开暂存库时显式 DISABLE_WRITE_AHEAD_LOGGING，避免产生 -wal 导致 cp 主库丢数据。</li>
- *   <li>兼容两种 schema：v101 旧版（modules/modules_state/scope 文本包名列）与
- *       Vector 新版（modules.mid / scope.mid）。</li>
- * </ul>
+ * <p>暂存目录放在模块私有 filesDir（root 拷出后 chown 回本应用 uid、restorecon）；不依赖设备
+ * sqlite3。打开暂存库时显式 DISABLE_WAL，避免产生 -wal 导致拷回丢数据。</p>
  */
 public final class RootScopeManager {
 
     private static final String TAG = "RootScopeManager";
     private static final String MODULE_PKG = "io.github.gjr787878.devicereset";
     private static final int USER_ID = 0;
+    private static final String LIVE_DB = "/data/adb/lspd/config/modules_config.db";
 
-    /**
-     * 等价于 android.database.sqlite.DISABLE_WAL（@hide 常量，
-     * 公开 SDK 不可见），数值 0x02000000：打开数据库时强制关闭 WAL（避免产生 -wal 导致拷回丢数据）。
-     */
+    /** 等价于 android.database.sqlite.DISABLE_WAL（@hide 常量，数值 0x02000000）。 */
     private static final int DISABLE_WAL = 0x02000000;
 
     private final Context context;
     private final int appUid;
     private final File stageDir;
     private final File stageDb;
-    private final String SDB;   // 暂存库绝对路径
+    private final String SDB;
     private final String SWAL;
     private final String SSHM;
+    private final String BACKUP_DB;
 
     private Boolean rootCached = null;
-    private String dbPathCached = null;
-    private String moduleDirCached = null;
 
     public RootScopeManager(Context context) {
         this.context = context.getApplicationContext();
@@ -84,6 +61,7 @@ public final class RootScopeManager {
         this.SDB = stageDb.getAbsolutePath();
         this.SWAL = SDB + "-wal";
         this.SSHM = SDB + "-shm";
+        this.BACKUP_DB = new File(stageDir, "live_backup.db").getAbsolutePath();
     }
 
     // ============================== root shell ==============================
@@ -142,62 +120,9 @@ public final class RootScopeManager {
         return rootCached;
     }
 
-    // ============================== 路径探测 ==============================
-
-    /** 定位 modules_config.db（结果缓存）。 */
-    public String findDbPath() {
-        if (dbPathCached != null) return dbPathCached;
-        String script =
-                "for p in \\\n" +
-                "  /data/adb/lspd/config/modules_config.db \\\n" +
-                "  /data/adb/modules/zygisk_lsposed/config/modules_config.db \\\n" +
-                "  /data/adb/modules/zygisk_vector/config/modules_config.db \\\n" +
-                "  /data/adb/modules/*lsposed*/config/modules_config.db \\\n" +
-                "  /data/adb/modules/*lspd*/config/modules_config.db \\\n" +
-                "  /data/adb/modules/*vector*/config/modules_config.db; do\n" +
-                "  [ -f \"$p\" ] && echo \"$p\" && break\n" +
-                "done";
-        Result r = runRoot(script);
-        Log.i(TAG, "findDbPath: exit=" + r.exitCode + " output=" + r.output);
-        if (r.ok() && !r.output.isEmpty()) {
-            String p = r.output.split("\\n")[0].trim();
-            if (!p.isEmpty() && p.contains("modules_config.db")) {
-                dbPathCached = p;
-                return p;
-            }
-        }
-        return null;
-    }
-
-    /**
-     * 定位框架 magisk 模块目录（含 daemon 启动脚本，以及 {@code cli}（Vector release）或
-     * {@code lspctl}（旧 LSPosed）CLI），用于写入作用域 / 重启守护进程。
-     */
-    public String findModuleDir() {
-        if (moduleDirCached != null) return moduleDirCached;
-        // 目录内只要有 daemon 且 (cli 或 lspctl) 即视为框架模块目录
-        String script =
-                "for d in /data/adb/modules/*/ /data/adb/modules_update/*/; do\n" +
-                "  if [ -f \"$d/daemon\" ] && { [ -f \"$d/cli\" ] || [ -f \"$d/lspctl\" ]; }; then\n" +
-                "    case \"$d\" in *vector*|*lsposed*|*lspd*) echo \"$d\"; break;; esac\n" +
-                "  fi\n" +
-                "done\n" +
-                "if [ -z \"$moduleDir\" ]; then\n" +
-                "  for d in /data/adb/modules/*/; do\n" +
-                "    [ -f \"$d/daemon\" ] && { [ -f \"$d/cli\" ] || [ -f \"$d/lspctl\" ]; } && { echo \"$d\"; break; }\n" +
-                "  done\n" +
-                "fi";
-        Result r = runRoot(script);
-        if (r.ok() && !r.output.isEmpty()) {
-            String d = r.output.split("\\n")[0].trim();
-            if (d.endsWith("/")) { moduleDirCached = d; return d; }
-        }
-        return null;
-    }
-
     // ============================== 拷出（root → filesDir） ==============================
 
-    /** root 把 db(+wal/shm) 拷到私有暂存目录，并 chown/restorecon 让本应用可读写。 */
+    /** root 把 db(+wal/shm) 拷到私有暂存目录，并 chown/restorecon 让本应用可读写；同时备份 live 库。 */
     private boolean stageFromDevice(String db) {
         String script =
                 "rm -rf '" + stageDir.getAbsolutePath() + "'\n" +
@@ -205,7 +130,8 @@ public final class RootScopeManager {
                 "cp '" + db + "' '" + SDB + "' 2>&1\n" +
                 "[ -f '" + db + "-wal' ] && cp '" + db + "-wal' '" + SWAL + "' 2>&1\n" +
                 "[ -f '" + db + "-shm' ] && cp '" + db + "-shm' '" + SSHM + "' 2>&1\n" +
-                "chmod 666 '" + SDB + "' 2>/dev/null\n" +
+                "cp '" + db + "' '" + BACKUP_DB + "' 2>&1\n" +
+                "chmod 666 '" + SDB + "' '" + BACKUP_DB + "' 2>/dev/null\n" +
                 "[ -f '" + SWAL + "' ] && chmod 666 '" + SWAL + "' 2>/dev/null\n" +
                 "chown -R " + appUid + ":" + appUid + " '" + stageDir.getAbsolutePath() + "' 2>&1\n" +
                 "restorecon -RF '" + stageDir.getAbsolutePath() + "' 2>&1\n" +
@@ -214,18 +140,18 @@ public final class RootScopeManager {
         Result r = runRoot(script);
         Log.i(TAG, "stageFromDevice: exit=" + r.exitCode + " output=" + r.output);
         boolean ok = r.output.contains("STAGED") && stageDb.exists() && stageDb.canRead();
-        Log.i(TAG, "stageFromDevice: ok=" + ok + " exists=" + stageDb.exists() + " canRead=" + stageDb.canRead());
+        Log.i(TAG, "stageFromDevice: ok=" + ok + " exists=" + stageDb.exists()
+                + " canRead=" + stageDb.canRead());
         return ok;
     }
 
     // ============================== 表结构检测 ==============================
 
     /**
-     * 检测 LSPosed 数据库表结构版本。
-     * 返回：
-     *   2 = 新版 Vector/LSPosed: modules(mid, ...) + scope(mid, app_pkg_name, user_id)
-     *   1 = 旧版 v101: modules(module_pkg_name, apk_path) + modules_state + scope(module_pkg_name, ...)
-     *   0 = 未知/无 scope 表
+     * 检测数据库表结构版本：
+     *   2 = 新版：modules(mid,...) + scope(mid,...)
+     *   1 = 旧版：modules(module_pkg_name, apk_path) + modules_state + scope(module_pkg_name,...)
+     *   0 = 未知/无 scope
      */
     private int detectSchema(SQLiteDatabase sql) {
         try (Cursor c = sql.rawQuery(
@@ -238,7 +164,6 @@ public final class RootScopeManager {
                 if ("scope".equals(n)) hasScope = true;
             }
             if (!hasScope) return 0;
-            // 检测 modules 表是否有 mid 列
             if (hasModules) {
                 try (Cursor cc = sql.rawQuery("PRAGMA table_info(modules)", null)) {
                     while (cc.moveToNext()) {
@@ -254,10 +179,7 @@ public final class RootScopeManager {
 
     /** 读取本模块当前作用域包名集合。失败返回 null。 */
     public Set<String> readScope() {
-        String db = findDbPath();
-        Log.i(TAG, "readScope: dbPath=" + db);
-        if (db == null) { Log.e(TAG, "readScope: db not found"); return null; }
-        if (!stageFromDevice(db)) { Log.e(TAG, "readScope: stageFromDevice failed"); return null; }
+        if (!stageFromDevice(LIVE_DB)) { Log.e(TAG, "readScope: stageFromDevice failed"); return null; }
         Set<String> scope = new LinkedHashSet<>();
         SQLiteDatabase sql = null;
         try {
@@ -268,11 +190,8 @@ public final class RootScopeManager {
             Log.i(TAG, "readScope: schema=" + schema);
             if (schema == 2) {
                 Long mid = getModuleMidV2(sql);
-                Log.i(TAG, "readScope: mid=" + mid);
-                if (mid == null) return scope; // 模块未注册，返回空集合
-                // 模块被禁用（如取消全部目标）则视为无作用域
-                try (Cursor e = sql.rawQuery(
-                        "SELECT enabled FROM modules WHERE mid=?",
+                if (mid == null) return scope;
+                try (Cursor e = sql.rawQuery("SELECT enabled FROM modules WHERE mid=?",
                         new String[]{String.valueOf(mid)})) {
                     if (e.moveToFirst() && e.getInt(0) == 0) return scope;
                 }
@@ -282,7 +201,6 @@ public final class RootScopeManager {
                     while (c.moveToNext()) scope.add(c.getString(0));
                 }
             } else if (schema == 1) {
-                // 模块被禁用（modules_state.enabled=0，如取消全部目标）则视为无作用域
                 try (Cursor e = sql.rawQuery(
                         "SELECT enabled FROM modules_state WHERE module_pkg_name=? AND user_id=?",
                         new String[]{MODULE_PKG, String.valueOf(USER_ID)})) {
@@ -320,44 +238,30 @@ public final class RootScopeManager {
     // ============================== 写入作用域（全量同步） ==============================
 
     /**
-     * 把本模块作用域全量同步为 {@code targetPkgs}，并确保模块已启用。两条路径：
-     * <ol>
-     *   <li><b>首选 Vector release 的 {@code cli}</b>：root 调用模块自带 CLI（编译期令牌鉴权，
-     *       无开发者模式 / 无 ADB 来源门），由<b>守护进程在自己的内存空间里写库并
-     *       ConfigCache.requestCacheUpdate() 刷新缓存</b> —— 无需重启守护进程、无“部分激活”、
-     *       即时生效。</li>
-     *   <li><b>兜底旧 LSPosed（lspctl）</b>：lspctl 的写作用域命令被开发者模式 +
-     *       CliOriginVerifier（需 adbd 祖先 + ADB tty）挡住，App 无法使用，只能直写库后
-     *       setsid 重启守护进程。</li>
-     * </ol>
-     * 取消勾选：普通取消由 scope 全量覆盖完成；若一个目标都不剩，则禁用模块（scope 行保留，
-     * 下次勾选经 scope set 自动重新启用）。
+     * 把本模块作用域全量同步为 {@code targetPkgs}（系统框架 system 始终保留）。
+     * 自动按分支选择方案：Vector 走 cli（无重启）；官方走直写 + 重启（失败自动回滚）。
      */
     public boolean syncScope(Set<String> targetPkgs) {
-        String modDir = findModuleDir();
-        if (modDir == null) { Log.e(TAG, "syncScope: module dir not found"); return false; }
+        FrameworkDetector.Info fw = FrameworkDetector.detect();
+        if (fw.flavor == FrameworkDetector.FLAVOR_NONE) {
+            Log.e(TAG, "syncScope: framework not detected"); return false;
+        }
 
-        // ---- 首选：cli（守护进程内部处理，零重启）----
-        String cli = locateCli(modDir);
-        if (cli != null) {
-            boolean ok = applyViaCli(cli, targetPkgs);
-            Log.i(TAG, "syncScope via cli: " + ok + ", targets="
-                    + (targetPkgs == null ? 0 : targetPkgs.size()));
+        // ---- Vector：cli 直写（守护进程内部处理，零重启）----
+        if (fw.cliWritesUsable()) {
+            boolean ok = applyViaCli(fw.cli, targetPkgs);
+            Log.i(TAG, "syncScope via cli (Vector): " + ok
+                    + ", targets=" + (targetPkgs == null ? 0 : targetPkgs.size()));
             return ok;
         }
 
-        // ---- 兜底：旧 lsposed 直写库 + 重启守护进程 ----
-        String db = findDbPath();
-        if (db == null) { Log.e(TAG, "syncScope: db not found"); return false; }
-        Log.i(TAG, "syncScope via direct-write+restart (legacy lspctl framework)");
-
-        // 旧路径强制保留 system/android（旧框架系统注入的前提）
+        // ---- 官方：直写库 + 重启守护进程 ----
+        Log.i(TAG, "syncScope via direct-write+restart (official LSPosed)");
         Set<String> fullScope = new LinkedHashSet<>();
-        fullScope.add("system");
-        fullScope.add("android");
+        fullScope.add("system"); // 系统框架只写 system（不写 android）
         if (targetPkgs != null) fullScope.addAll(targetPkgs);
 
-        if (!stageFromDevice(db)) return false;
+        if (!stageFromDevice(LIVE_DB)) return false;
 
         boolean edited;
         SQLiteDatabase sql = null;
@@ -370,9 +274,7 @@ public final class RootScopeManager {
             try {
                 String apk = context.getPackageManager()
                         .getApplicationInfo(MODULE_PKG, 0).sourceDir;
-
                 if (schema == 2) {
-                    // 新版：modules(mid, ...) + scope(mid, ...)
                     Long mid = getModuleMidV2(sql);
                     if (mid == null) {
                         sql.execSQL(
@@ -391,17 +293,14 @@ public final class RootScopeManager {
                                 new Object[]{mid, pkg, USER_ID});
                     }
                 } else if (schema == 1) {
-                    // 旧版 v101：modules(module_pkg_name, apk_path) + modules_state + scope(module_pkg_name, ...)
                     sql.execSQL("INSERT OR IGNORE INTO modules (module_pkg_name, apk_path) VALUES (?,?)",
                             new Object[]{MODULE_PKG, apk});
-                    // 确保 modules_state 存在且 enabled=1
                     sql.execSQL(
                             "INSERT OR IGNORE INTO modules_state (module_pkg_name, user_id, enabled, scope_request_blocked) VALUES (?,?,1,0)",
                             new Object[]{MODULE_PKG, USER_ID});
                     sql.execSQL(
                             "UPDATE modules_state SET enabled=1 WHERE module_pkg_name=? AND user_id=?",
                             new Object[]{MODULE_PKG, USER_ID});
-                    // scope: 全量替换该模块的主用户作用域（DELETE 即“取消勾选”生效）
                     sql.execSQL("DELETE FROM scope WHERE module_pkg_name=? AND user_id=?",
                             new Object[]{MODULE_PKG, USER_ID});
                     for (String pkg : fullScope) {
@@ -431,32 +330,15 @@ public final class RootScopeManager {
             return false;
         }
 
-        // 重启守护进程：停旧 → 拷回新库 → setsid 起新（独立会话，不随 su 死亡）→ lspctl 轮询就绪
-        boolean restarted = stopWriteBackAndRestart(modDir, db);
+        boolean restarted = stopWriteBackAndRestart(fw);
         cleanupStage();
         Log.i(TAG, "syncScope: edited=true restarted=" + restarted);
         return restarted;
     }
 
     /**
-     * 定位可用的 cli 可执行脚本：优先守护进程启动时拷贝到 /data/adb/lspd/cli 的副本，
-     * 其次模块目录内的 cli；都不存在（旧 lspctl 框架）返回 null。
-     */
-    private String locateCli(String modDir) {
-        Result r = runRoot(
-                "for c in /data/adb/lspd/cli '" + modDir + "cli'; do\n" +
-                "  [ -x \"$c\" ] && { echo \"$c\"; break; }\n" +
-                "done");
-        if (r.ok() && !r.output.isEmpty()) {
-            String c = r.output.split("\\n")[0].trim();
-            if (!c.isEmpty()) return c;
-        }
-        return null;
-    }
-
-    /**
-     * 经 cli 写入作用域（root）。{@code --json} 输出 CliResponse，以其中 success 字段判定。
-     * 无目标时禁用模块；有目标时 scope set（内部会 enableModule + 全量覆盖 scope + 刷缓存）。
+     * 经 cli 写入作用域（root）。{@code --json} 输出 CliResponse，以 success 字段判定。
+     * 无目标时禁用模块；有目标时 scope set（内部 enableModule + 全量覆盖 scope + 刷缓存）。
      */
     private boolean applyViaCli(String cli, Set<String> targets) {
         int n = targets == null ? 0 : targets.size();
@@ -473,59 +355,66 @@ public final class RootScopeManager {
         }
         Result r = runRoot(script);
         Log.i(TAG, "applyViaCli: exit=" + r.exitCode + " output=" + r.output);
-        // gson pretty print 含空格，去空白后匹配 "success":true
         return r.ok() && r.output.replaceAll("\\s+", "").contains("\"success\":true");
     }
 
     /**
-     * 完整重启闭环（全部在一个 root 会话内完成）：
+     * 完整重启闭环（全部在一个 root 会话内）：
      * 1. SIGTERM 停旧守护进程（超时 SIGKILL）；
-     * 2. 拷回新库（chmod 660 / chown root:root / restorecon，与 live 一致）+ sync；
-     * 3. setsid 起新守护进程（独立会话、stdio 到 /dev/null，不随 su 会话死亡）；
-     * 4. lspctl status 轮询直到就绪；
-     * 5. 最终再确认一次，输出 RESTART_OK / RESTART_FAIL。
+     * 2. 拷回新库（权限/restorecon 与 live 一致）+ sync；
+     * 3. setsid 起新守护进程（复刻官方 service.sh 的 daemon --force）；
+     * 4. lspctl status 轮询直到就绪（约 90 秒，覆盖首次 dex2oat）；
+     * 5. 成功 RESTART_OK；失败则恢复旧库、重新拉起，输出 RESTART_FAIL（不留下半激活）。
      */
-    private boolean stopWriteBackAndRestart(String modDir, String db) {
-        String daemon = modDir + "daemon";
-        String lspctl = modDir + "lspctl";
+    private boolean stopWriteBackAndRestart(FrameworkDetector.Info fw) {
+        String daemon = fw.moduleDir + "daemon";
+        String lspctl = fw.moduleDir + "lspctl";
         String script =
-                // 1) 停旧
                 "set +e\n" +
                 "for p in $(pidof lspd); do kill -TERM \"$p\" 2>/dev/null; done\n" +
                 "i=0\n" +
                 "while pidof lspd >/dev/null 2>&1; do\n" +
                 "  i=$((i+1))\n" +
-                "  if [ $i -ge 15 ]; then\n" +
+                "  if [ $i -ge 25 ]; then\n" +
                 "    for p in $(pidof lspd); do kill -KILL \"$p\" 2>/dev/null; done\n" +
                 "    sleep 0.5; break\n" +
                 "  fi\n" +
                 "  sleep 0.2\n" +
                 "done\n" +
                 "echo OLD_STOPPED\n" +
-                // 2) 拷回新库
-                "cp '" + SDB + "' '" + db + "'\n" +
-                "rm -f '" + db + "-wal' '" + db + "-shm'\n" +
-                "chmod 660 '" + db + "' 2>/dev/null\n" +
-                "chown root:root '" + db + "' 2>/dev/null\n" +
-                "restorecon -F '" + db + "' 2>/dev/null\n" +
+                "cp '" + SDB + "' '" + LIVE_DB + "'\n" +
+                "rm -f '" + LIVE_DB + "-wal' '" + LIVE_DB + "-shm'\n" +
+                "chmod 660 '" + LIVE_DB + "' 2>/dev/null\n" +
+                "chown root:root '" + LIVE_DB + "' 2>/dev/null\n" +
+                "restorecon -F '" + LIVE_DB + "' 2>/dev/null\n" +
                 "sync\n" +
                 "echo DB_WRITTEN\n" +
-                // 3) setsid 起新守护进程（独立会话）
                 "setsid sh '" + daemon + "' --force </dev/null >/dev/null 2>&1 &\n" +
                 "echo NEW_LAUNCHED\n" +
-                // 4) lspctl 轮询就绪（最多约 40*0.5s，加上每次调用耗时）
+                "i=0\n" +
+                "ok=0\n" +
+                "until '" + lspctl + "' status >/dev/null 2>&1; do\n" +
+                "  i=$((i+1))\n" +
+                "  if [ $i -ge 60 ]; then break; fi\n" +
+                "  sleep 1\n" +
+                "done\n" +
+                "if pidof lspd >/dev/null 2>&1 && '" + lspctl + "' status >/dev/null 2>&1; then ok=1; fi\n" +
+                "if [ $ok -eq 1 ]; then echo RESTART_OK; exit 0; fi\n" +
+                "echo RESTART_FAIL, restoring previous db\n" +
+                "for p in $(pidof lspd); do kill -KILL \"$p\" 2>/dev/null; done\n" +
+                "sleep 0.5\n" +
+                "cp '" + BACKUP_DB + "' '" + LIVE_DB + "'\n" +
+                "chmod 660 '" + LIVE_DB + "' 2>/dev/null\n" +
+                "chown root:root '" + LIVE_DB + "' 2>/dev/null\n" +
+                "restorecon -F '" + LIVE_DB + "' 2>/dev/null\n" +
+                "sync\n" +
+                "setsid sh '" + daemon + "' --force </dev/null >/dev/null 2>&1 &\n" +
                 "i=0\n" +
                 "until '" + lspctl + "' status >/dev/null 2>&1; do\n" +
                 "  i=$((i+1))\n" +
-                "  if [ $i -ge 40 ]; then break; fi\n" +
-                "  sleep 0.5\n" +
-                "done\n" +
-                // 5) 最终确认
-                "if pidof lspd >/dev/null 2>&1 && '" + lspctl + "' status >/dev/null 2>&1; then\n" +
-                "  echo RESTART_OK\n" +
-                "else\n" +
-                "  echo RESTART_FAIL\n" +
-                "fi";
+                "  if [ $i -ge 60 ]; then break; fi\n" +
+                "  sleep 1\n" +
+                "done\n";
         Result r = runRoot(script);
         Log.i(TAG, "stopWriteBackAndRestart: exit=" + r.exitCode + "\n" + r.output);
         return r.output.contains("RESTART_OK");
@@ -537,40 +426,33 @@ public final class RootScopeManager {
 
     // ============================== 守护进程 / 目标应用 ==============================
 
-    /** 检测 lspd 守护进程是否存活。 */
     public boolean isDaemonAlive() {
         Result r = runRoot("pidof lspd >/dev/null 2>&1 && echo ALIVE || echo DEAD");
         return r.output.contains("ALIVE");
     }
 
-    /**
-     * 确保守护进程存活（在 App 启动时调用）：已存活则什么都不做；
-     * 已死则用 setsid 安全拉起（独立会话，不随 su 会话死亡），并 lspctl 轮询确认就绪。
-     */
+    /** 确保守护进程存活（App 启动时调用）：已存活什么都不做；已死则安全拉起并轮询确认。 */
     public boolean ensureDaemon() {
-        if (isDaemonAlive()) {
-            Log.i(TAG, "ensureDaemon: already alive");
-            return true;
-        }
+        if (isDaemonAlive()) { Log.i(TAG, "ensureDaemon: already alive"); return true; }
         Log.w(TAG, "ensureDaemon: daemon dead, starting...");
-        String modDir = findModuleDir();
-        if (modDir == null) { Log.e(TAG, "ensureDaemon: module dir not found"); return false; }
-        String daemon = modDir + "daemon";
-        String lspctl = modDir + "lspctl";
+        FrameworkDetector.Info fw = FrameworkDetector.detect();
+        if (fw.flavor == FrameworkDetector.FLAVOR_NONE) {
+            Log.e(TAG, "ensureDaemon: framework not detected"); return false;
+        }
+        String daemon = fw.moduleDir + "daemon";
+        String lspctl = fw.moduleDir + "lspctl";
         String script =
                 "set +e\n" +
                 "setsid sh '" + daemon + "' --force </dev/null >/dev/null 2>&1 &\n" +
                 "i=0\n" +
                 "until '" + lspctl + "' status >/dev/null 2>&1; do\n" +
                 "  i=$((i+1))\n" +
-                "  if [ $i -ge 40 ]; then break; fi\n" +
-                "  sleep 0.5\n" +
+                "  if [ $i -ge 60 ]; then break; fi\n" +
+                "  sleep 1\n" +
                 "done\n" +
                 "if pidof lspd >/dev/null 2>&1 && '" + lspctl + "' status >/dev/null 2>&1; then\n" +
                 "  echo DAEMON_UP\n" +
-                "else\n" +
-                "  echo DAEMON_DOWN\n" +
-                "fi";
+                "else echo DAEMON_DOWN\nfi";
         Result r = runRoot(script);
         boolean up = r.output.contains("DAEMON_UP");
         Log.i(TAG, "ensureDaemon: " + (up ? "started" : "FAILED") + " output=" + r.output);

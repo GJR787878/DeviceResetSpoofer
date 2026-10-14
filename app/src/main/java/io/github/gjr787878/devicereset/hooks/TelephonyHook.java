@@ -10,7 +10,12 @@ import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 /**
- * Hook 电话相关信息：IMEI、MEID、运营商信息。
+ * Hook 电话相关信息：IMEI、MEID、IMSI、ICCID、运营商信息。
+ *
+ * <p>关键：Android 10+ 起，无 {@code READ_PRIVILEGED_PHONE_STATE}（系统应用/特权应用）时，
+ * getDeviceId/getImei/getMeid/getSubscriberId/getSimSerialNumber 等方法<b>在原方法内直接抛
+ * SecurityException</b>。若用 {@code afterHookedMethod}，原方法已抛异常、after 不会执行，
+ * 假值无法返回。因此全部改用 {@code beforeHookedMethod} + setResult 在原方法执行前短路。</p>
  */
 public class TelephonyHook {
 
@@ -23,43 +28,14 @@ public class TelephonyHook {
             hookMethodReturnInt("getImei", int.class, identity.imei);
             hookMethodReturn("getMeid", identity.meid);
             hookMethodReturnInt("getMeid", int.class, identity.meid);
-
-            try {
-                XposedHelpers.findAndHookMethod(TelephonyManager.class, "getSubscriberId",
-                        new XC_MethodHook() {
-                            @Override
-                            protected void afterHookedMethod(MethodHookParam param) {
-                                try {
-                                    // 返回预生成固定的IMSI，多次读取保持一致
-                                    if (identity.imsi != null) {
-                                        param.setResult(identity.imsi);
-                                    }
-                                } catch (Throwable t) {
-                                    XposedBridge.log("[DeviceReset] getSubscriberId error: " + t.getMessage());
-                                }
-                            }
-                        });
-            } catch (Throwable ignored) {}
-
-            try {
-                XposedHelpers.findAndHookMethod(TelephonyManager.class, "getSimSerialNumber",
-                        new XC_MethodHook() {
-                            @Override
-                            protected void afterHookedMethod(MethodHookParam param) {
-                                try {
-                                    // 返回预生成固定的ICCID，多次读取保持一致
-                                    if (identity.iccid != null) {
-                                        param.setResult(identity.iccid);
-                                    }
-                                } catch (Throwable t) {
-                                    XposedBridge.log("[DeviceReset] getSimSerialNumber error: " + t.getMessage());
-                                }
-                            }
-                        });
-            } catch (Throwable ignored) {}
+            hookMethodReturn("getSubscriberId", identity.imsi);
+            hookMethodReturnInt("getSubscriberId", int.class, identity.imsi);
+            hookMethodReturn("getSimSerialNumber", identity.iccid);
+            hookMethodReturnInt("getSimSerialNumber", int.class, identity.iccid);
         }
 
         if (hookCarrier) {
+            // 运营商名/编号通常不抛权限，但同样用 before 短路，保证一次写对。
             hookMethodReturn("getNetworkOperator", identity.networkOperator);
             hookMethodReturn("getNetworkOperatorName", identity.networkOperatorName);
             hookMethodReturn("getSimOperator", identity.simOperator);
@@ -75,7 +51,7 @@ public class TelephonyHook {
             XposedHelpers.findAndHookMethod(TelephonyManager.class, methodName,
                     new XC_MethodHook() {
                         @Override
-                        protected void afterHookedMethod(MethodHookParam param) {
+                        protected void beforeHookedMethod(MethodHookParam param) {
                             try {
                                 param.setResult(value);
                             } catch (Throwable t) {
@@ -92,7 +68,7 @@ public class TelephonyHook {
             XposedHelpers.findAndHookMethod(TelephonyManager.class, methodName, paramType,
                     new XC_MethodHook() {
                         @Override
-                        protected void afterHookedMethod(MethodHookParam param) {
+                        protected void beforeHookedMethod(MethodHookParam param) {
                             try {
                                 param.setResult(value);
                             } catch (Throwable t) {

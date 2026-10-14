@@ -35,14 +35,14 @@ public class BuildInfoHook {
             } catch (Throwable ignored) {}
         }
 
-        // Hook Build.getRadioVersion()
+        // Hook Build.getRadioVersion()：用 before 短路（部分版本读取基带版本受权限门限制）
         try {
             XposedHelpers.findAndHookMethod(
                     Build.class,
                     "getRadioVersion",
                     new XC_MethodHook() {
                         @Override
-                        protected void afterHookedMethod(MethodHookParam param) {
+                        protected void beforeHookedMethod(MethodHookParam param) {
                             if (identity.radioVersion != null) {
                                 param.setResult(identity.radioVersion);
                             }
@@ -51,14 +51,15 @@ public class BuildInfoHook {
             );
         } catch (Throwable ignored) {}
 
-        // Hook Build.getSerial() (Android 8.0+)
+        // Hook Build.getSerial() (Android 8.0+)：Android 10+ 无 READ_PRIVILEGED_PHONE_STATE 时
+        // 原方法直接抛 SecurityException，after 不执行，故必须用 before 短路。
         try {
             XposedHelpers.findAndHookMethod(
                     Build.class,
                     "getSerial",
                     new XC_MethodHook() {
                         @Override
-                        protected void afterHookedMethod(MethodHookParam param) {
+                        protected void beforeHookedMethod(MethodHookParam param) {
                             if (identity.serial != null) {
                                 param.setResult(identity.serial);
                             }

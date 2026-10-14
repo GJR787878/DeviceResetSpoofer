@@ -1,1 +1,1 @@
-DeviceResetSpoofer — 清除应用数据后自动生成全新设备识别码的 LSPosed 模块。支持应用内勾选目标即自动写入作用域生效（root，零点击、免开管理器），随机/自定义伪装值（Android ID/广告ID/IMEI/序列号/MAC/品牌型号/GSF/运营商等），绿色「已注入✓」即生效。
+DeviceResetSpoofer — 自动识别官方 LSPosed 与 JingMatrix/Vector 双分支的设备伪装模块，主页额头显示「已连接 XX（框架名+版本）」。应用内勾选目标即自动写入作用域（root，Vector 经 cli 即时生效、官方经直写库+重启守护进程几秒生效，免开管理器），随机/自定义伪装值（Android ID/广告ID/IMEI/MEID/IMSI/ICCID/序列号/MAC/品牌型号/GSF/运营商等），绿色「已注入✓」即生效。

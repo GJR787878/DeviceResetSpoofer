@@ -26,6 +26,7 @@ import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 
 import io.github.gjr787878.devicereset.Config;
+import io.github.gjr787878.devicereset.FrameworkDetector;
 import io.github.gjr787878.devicereset.GlassButtonDrawable;
 import io.github.gjr787878.devicereset.LSPosedScopeHelper;
 import io.github.gjr787878.devicereset.RootScopeManager;
@@ -39,8 +40,8 @@ public class MainActivity extends AppCompatActivity {
     private static final String LANG_ZH = "zh";
     private static final String LANG_EN = "en";
     private static final String LANG_RU = "ru";
-    private static final String UPDATE_REPO = "GJR787878/DeviceResetSpooferX";
-    private static final String REPO_HOME_URL = "https://github.com/GJR787878/DeviceResetSpooferX";
+    private static final String UPDATE_REPO = "GJR787878/DeviceResetSpoofer";
+    private static final String REPO_HOME_URL = "https://github.com/GJR787878/DeviceResetSpoofer";
 
     private static final int COLOR_WHITE = 0xFFFFFFFF;
     private static final int COLOR_BLUE = 0xFF0A84FF;
@@ -84,6 +85,9 @@ public class MainActivity extends AppCompatActivity {
     private volatile boolean rootMode = false;
     private volatile boolean pickerApplying = false; // 守护进程重启期间忽略重复点选
     private TextView lspStatusTv; // 设置页 LSPosed 框架状态行
+    private TextView homeHeaderTv; // 主页额头：已连接 XX（框架名 + 版本）
+    private View homeHeaderDot;    // 主页额头状态圆点
+    private volatile FrameworkDetector.Info fwInfo; // 精确检测到的框架信息
 
     // ===== 三语字符串 =====
     private String t(String zh, String en, String ru) {
@@ -111,9 +115,15 @@ public class MainActivity extends AppCompatActivity {
      *  同时 root 读 LSPosed 配置库真实状态（libxposed service 未连接时兜底显示真实注入状态） */
     private void refreshScopeStatus() {
         new Thread(() -> {
-            // 1) 首选 root：直读作用域库（权威），用于"勾上即生效、零点击"
+            // 1) 首选 root：精确检测框架分支 + 直读作用域库（权威），用于"勾上即生效、零点击"
             boolean root = rootScope.isRootAvailable();
-            if (root) rootScope.ensureDaemon(); // 启动时确保守护进程存活（已死则安全启动）
+            FrameworkDetector.Info fw = null;
+            if (root) {
+                fw = FrameworkDetector.detect(); // 精确检测分支/版本
+                fwInfo = fw;
+                rootScope.ensureDaemon(); // 启动时确保守护进程存活（已死则安全启动）
+            }
+            final FrameworkDetector.Info fwFinal = fw;
             java.util.Set<String> rootScopeSet = root ? rootScope.readScope() : null;
             if (rootScopeSet != null) {
                 rootMode = true;
@@ -152,14 +162,16 @@ public class MainActivity extends AppCompatActivity {
             synchronized (scopeDbTargets) { scopeCount = scopeDbTargets.size(); }
             runOnUiThread(() -> {
                 refreshAppList();
+                updateHomeHeader(fwFinal, scopeCount);
                 if (lspStatusTv != null) {
                     if (rootMode) {
-                        lspStatusTv.setText(t("框架：root 直写已就绪，作用域 ",
-                                "Framework: root sync ready, scope ",
-                                "Фреймворк: root-синхронизация готова, область ")
-                                + scopeCount + t(" 个应用（勾选立即生效）",
-                                " app(s) (applied instantly)",
-                                " приложений (применяется сразу)"));
+                        String fwName = fwFinal != null ? fwFinal.name : "LSPosed";
+                        String fwVer = fwFinal != null ? fwFinal.version : "";
+                        lspStatusTv.setText(t("框架：已连接 ", "Framework: connected to ",
+                                "Фреймворк: подключено к ") + fwName + " " + fwVer
+                                + "，" + scopeCount + t(" 个作用域（勾选立即生效）",
+                                " scope(s) (applied instantly)",
+                                " областей (применяется сразу)"));
                         lspStatusTv.setTextColor(COLOR_GREEN);
                     } else if (scopeConnected) {
                         lspStatusTv.setText(t("框架：已连接，作用域 ",
@@ -208,6 +220,35 @@ public class MainActivity extends AppCompatActivity {
         synchronized (scopeDbTargets) {
             return scopeDbLoaded && scopeDbTargets.contains(pkg);
         }
+    }
+
+    /**
+     * 主页额头：展示精确检测到的框架。
+     * 检测到 → 「已连接 {框架名} {版本}」（绿点）；未检测到 → 「未检测到框架」（灰点）。
+     */
+    private void updateHomeHeader(FrameworkDetector.Info fw, int scopeCount) {
+        if (homeHeaderTv == null) return;
+        if (fw != null && fw.flavor != FrameworkDetector.FLAVOR_NONE) {
+            String ver = fw.version != null ? fw.version : "";
+            homeHeaderTv.setText(t("已连接 ", "Connected to ", "Подключено к ")
+                    + fw.name + " " + ver + " · " + scopeCount
+                    + t(" 个作用域", " scope(s)", " областей"));
+            homeHeaderTv.setTextColor(COLOR_GREEN);
+            setHeaderDot(COLOR_GREEN);
+        } else {
+            homeHeaderTv.setText(t("未检测到框架（请安装 LSPosed 或 Vector 并启用本模块）",
+                    "No framework detected (install LSPosed or Vector and enable this module)",
+                    "Фреймворк не найден (установите LSPosed или Vector и включите модуль)"));
+            homeHeaderTv.setTextColor(COLOR_GRAY);
+            setHeaderDot(COLOR_GRAY);
+        }
+    }
+
+    private void setHeaderDot(int color) {
+        if (homeHeaderDot == null) return;
+        android.graphics.drawable.GradientDrawable g =
+                (android.graphics.drawable.GradientDrawable) homeHeaderDot.getBackground();
+        if (g != null) g.setColor(color);
     }
 
     @Override
@@ -304,6 +345,34 @@ public class MainActivity extends AppCompatActivity {
         title.setTextColor(COLOR_WHITE);
         title.setTypeface(title.getTypeface(), android.graphics.Typeface.BOLD);
         ll.addView(title);
+
+        // ===== 主页额头：自动检测并展示「已连接 XX（框架名 + 版本）」 =====
+        LinearLayout headerRow = new LinearLayout(this);
+        headerRow.setOrientation(LinearLayout.HORIZONTAL);
+        headerRow.setGravity(Gravity.CENTER_VERTICAL);
+        homeHeaderDot = new View(this);
+        float dotSize = 10 * d;
+        android.graphics.drawable.GradientDrawable dotBg =
+                new android.graphics.drawable.GradientDrawable();
+        dotBg.setShape(android.graphics.drawable.GradientDrawable.OVAL);
+        dotBg.setColor(COLOR_GRAY);
+        homeHeaderDot.setBackground(dotBg);
+        LinearLayout.LayoutParams dotLp = new LinearLayout.LayoutParams(
+                Math.round(dotSize), Math.round(dotSize));
+        headerRow.addView(homeHeaderDot, dotLp);
+        homeHeaderTv = new TextView(this);
+        homeHeaderTv.setText(t("正在检测框架…", "Detecting framework…", "Определение фреймворка…"));
+        homeHeaderTv.setTextSize(14);
+        homeHeaderTv.setTextColor(COLOR_GRAY);
+        LinearLayout.LayoutParams headerTvLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        headerTvLp.leftMargin = Math.round(10 * d);
+        headerRow.addView(homeHeaderTv, headerTvLp);
+        LinearLayout.LayoutParams headerRowLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        headerRowLp.topMargin = Math.round(6 * d);
+        headerRowLp.bottomMargin = Math.round(2 * d);
+        ll.addView(headerRow, headerRowLp);
 
         // 操作行：刷新按钮 + 选择应用按钮（缩小）+ 右侧计数，同一行
         LinearLayout actionRow = new LinearLayout(this);
@@ -2313,10 +2382,10 @@ public class MainActivity extends AppCompatActivity {
 
     private void showAboutDialog() {
         new AlertDialog.Builder(this)
-                .setTitle("DeviceResetSpooferX")
-                .setMessage(t("版本：4.5.8\n\n免开框架管理器的设备伪装模块。\n\n在「应用」页点「＋选择应用」点选目标即自动写入作用域（root，几秒内生效，无需点通知）→ 打开详情「随机」或「自定义」→ 重新打开目标应用即生效；绿色「已注入✓」即已生效。\n支持中文 / English / Русский",
-                        "Version: 4.5.8\n\nDevice spoofing module that works without opening the framework manager.\n\nOn the Apps tab tap \"+ Select App\" and choose a target — the scope is written automatically (root, applies in a few seconds, no notification tap) -> open its detail, Random / Customize -> reopen the app; a green \"Injected✓\" means it is active.\nSupports Chinese / English / Russian",
-                        "Версия: 4.5.8\n\nМодуль подмены устройства, работающий без открытия менеджера фреймворка.\n\nНа вкладке «Приложения» нажмите «+ Выбрать приложение» — область записывается автоматически (root, применяется за несколько секунд, без нажатия на уведомление) -> откройте детали, «Случайно»/«Настроить» -> перезапустите приложение; зелёное «Внедрено✓» означает, что модуль активен.\nПоддерживает 中文 / English / Русский"))
+                .setTitle("DeviceResetSpoofer")
+                .setMessage(t("版本：4.6.0\n\n自动识别官方 LSPosed 与 JingMatrix/Vector 双分支的设备伪装模块，主页额头显示「已连接 XX」。\n\n在「应用」页点「＋选择应用」点选目标：Vector 经 cli 即时生效、官方经直写库+重启守护进程几秒内生效，均无需点通知 → 打开详情「随机」或「自定义」→ 重新打开目标应用即生效；绿色「已注入✓」即已生效。\n支持中文 / English / Русский",
+                        "Version: 4.6.0\n\nDevice spoofing module that auto-detects both official LSPosed and JingMatrix/Vector; the home header shows \"Connected to XX\".\n\nOn the Apps tab tap \"+ Select App\": Vector applies instantly via cli, official via direct-write + daemon restart in a few seconds — no notification tap -> open its detail, Random / Customize -> reopen the app; a green \"Injected✓\" means it is active.\nSupports Chinese / English / Russian",
+                        "Версия: 4.6.0\n\nМодуль подмены устройства, автоматически определяющий официальный LSPosed и JingMatrix/Vector; в шапке главной страницы отображается «Подключено к XX».\n\nНа вкладке «Приложения» нажмите «+ Выбрать приложение»: Vector применяется мгновенно через cli, официальный — через прямую запись и перезапуск демона за несколько секунд, без нажатия на уведомление -> откройте детали, «Случайно»/«Настроить» -> перезапустите приложение; зелёное «Внедрено✓» означает, что модуль активен.\nПоддерживает 中文 / English / Русский"))
                 .setPositiveButton(t("确定", "OK", "ОК"), null)
                 .show();
     }
@@ -2426,15 +2495,15 @@ public class MainActivity extends AppCompatActivity {
                 .setTitle(t("发现新版本 v", "New version v", "Доступна новая версия v") + latest)
                 .setMessage(t("检测到新版本，是否下载？", "New version detected. Download?", "Обнаружена новая версия. Скачать?"))
                 .setPositiveButton(t("下载", "Download", "Скачать"), (d, w) -> {
-                    String asset = "DeviceResetSpooferX-v" + latest + ".apk";
+                    // CI 发布产物名为 DeviceResetSpoofer-{tag}.apk（tag=versionCode-versionName）
+                    String asset = "DeviceResetSpoofer-" + tag + ".apk";
                     String direct = "https://github.com/" + UPDATE_REPO + "/releases/download/" + tag + "/" + asset;
                     String[] mirrors = {"https://ghfast.top/", "https://gh-proxy.com/", "https://ghproxy.net/",
                             "https://mirror.ghproxy.com/", "https://github.moeyy.xyz/"};
                     String[] urls = new String[mirrors.length + 1];
                     for (int i = 0; i < mirrors.length; i++) urls[i] = mirrors[i] + direct;
                     urls[mirrors.length] = direct;
-                    AppDownloader.start(this, urls, REPO_HOME_URL,
-                            "DeviceResetSpooferX-v" + latest + ".apk", latest, currentLang);
+                    AppDownloader.start(this, urls, REPO_HOME_URL, asset, latest, currentLang);
                 })
                 .setNegativeButton(t("取消", "Cancel", "Отмена"), null)
                 .show();
