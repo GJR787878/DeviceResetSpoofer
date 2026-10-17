@@ -132,9 +132,9 @@ public class MainActivity extends AppCompatActivity {
             }
             if (homeHeaderDot != null) homeHeaderDot.setBackgroundColor(COLOR_GRAY);
             if (lspStatusTv != null) {
-                lspStatusTv.setText(t("框架：正在应用作用域，守护进程重启中（约 10-30 秒，期间管理器可能打不开）",
-                        "Framework: applying scope, daemon restarting (10-30s, manager may be unavailable meanwhile)",
-                        "Фреймворк: применение области, демон перезапускается (10-30с, менеджер может быть недоступен)"));
+                lspStatusTv.setText(t("框架：正在应用作用域，框架软重启中（约 1 分钟，屏幕会变黑、系统界面重新加载）",
+                        "Framework: applying scope, framework soft reboot (about 1 min; screen goes black and UI restarts)",
+                        "Фреймворк: применение области, мягкая перезагрузка фреймворка (около 1 мин; экран погаснет, интерфейс перезапустится)"));
                 lspStatusTv.setTextColor(COLOR_GRAY);
             }
         });
@@ -157,8 +157,37 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         new Thread(() -> {
+            // 0) 4.6.2 框架软重启 marker 优先：重启期间一切检测/读库/拉起都避让，
+            //    只显示「框架重启中」；完成（OK/FAIL）后清理并给出结果提示。
+            boolean root0 = rootScope.isRootAvailable();
+            if (root0) {
+                String marker = rootScope.readRebootMarker();
+                if (marker != null && !marker.contains("RESTART_OK") && !marker.contains("RESTART_FAIL")) {
+                    Log.i("MainActivity", "soft reboot in progress: " + marker);
+                    showApplyingState();
+                    scheduleScopeRefresh();
+                    return;
+                }
+                if (marker != null && marker.contains("RESTART_OK")) {
+                    rootScope.clearRebootArtifacts();
+                    Log.i("MainActivity", "soft reboot finished OK");
+                    runOnUiThread(() -> Toast.makeText(this,
+                            t("框架已重启，作用域已生效，管理器可正常打开",
+                                    "Framework restarted; scope applied; manager is available",
+                                    "Фреймворк перезапущен, область применена, менеджер доступен"),
+                            Toast.LENGTH_LONG).show());
+                } else if (marker != null && marker.contains("RESTART_FAIL")) {
+                    rootScope.clearRebootArtifacts();
+                    Log.w("MainActivity", "soft reboot FAILED");
+                    runOnUiThread(() -> Toast.makeText(this,
+                            t("框架重启失败，请手动重启手机后生效",
+                                    "Framework restart failed; please reboot the phone manually",
+                                    "Сбой перезапуска фреймворка; перезагрузите телефон вручную"),
+                            Toast.LENGTH_LONG).show());
+                }
+            }
             // 1) 首选 root：精确检测框架分支 + 直读作用域库（权威），用于"勾上即生效、零点击"
-            boolean root = rootScope.isRootAvailable();
+            boolean root = root0;
             FrameworkDetector.Info fw = null;
             if (root) {
                 fw = FrameworkDetector.detect(); // 精确检测分支/版本
@@ -1400,15 +1429,90 @@ public class MainActivity extends AppCompatActivity {
                                            final boolean adding, final String appName,
                                            final Runnable onUiDone) {
         if (pickerApplying) return;
+        FrameworkDetector.Info fw = fwInfo != null ? fwInfo : fwInfoLastGood;
+        // 官方 LSPosed：作用域变更必须重启框架（软重启 zygote）才能重建桥接、管理器才打得开；
+        // 先弹确认框，让用户选择立即软重启还是等下次手机重启。Vector 分支无需重启，直接执行。
+        if (fw != null && fw.isOfficial()) {
+            final android.app.AlertDialog dlg = new android.app.AlertDialog.Builder(this).create();
+            dlg.setTitle(t("需要重启框架", "Framework restart required", "Требуется перезапуск фреймворка"));
+            dlg.setMessage(t("作用域已保存。官方 LSPosed 需重启框架才能生效（约 1 分钟，不重启手机）：\n" +
+                                    "· 重启期间屏幕会变黑、系统界面重新加载，本应用会自动关闭；\n" +
+                                    "· 重启完成后 LSPosed 管理器即可正常打开，无需再重启手机。\n\n" +
+                                    "选「稍后」则等下次重启手机后生效（重启前管理器无法打开）。",
+                            "Scope saved. Official LSPosed needs a framework restart to apply (about 1 min, no phone reboot):\n" +
+                                    "· The screen goes black and the system UI reloads; this app closes automatically.\n" +
+                                    "· Afterwards the LSPosed manager opens normally — no phone reboot needed.\n\n" +
+                                    "Choose \"Later\" to apply on next phone reboot (manager unavailable until then).",
+                            "Область сохранена. Официальному LSPosed требуется перезапуск фреймворка (около 1 мин, без перезагрузки телефона):\n" +
+                                    "· Экран погаснет, системный интерфейс перезапустится, приложение закроется.\n" +
+                                    "· После этого менеджер LSPosed откроется нормально, перезагрузка телефона не нужна.\n\n" +
+                                    "«Позже» — применить при следующей перезагрузке телефона (до неё менеджер недоступен)."));
+            dlg.setButton(android.app.AlertDialog.BUTTON_POSITIVE,
+                    t("立即重启框架（推荐）", "Restart now (recommended)", "Перезапустить сейчас (рекомендуется)"),
+                    (di, w) -> executeScopeSubmit(desired, pkg, adding, appName, onUiDone, true));
+            dlg.setButton(android.app.AlertDialog.BUTTON_NEGATIVE,
+                    t("稍后（下次开机生效）", "Later (apply on reboot)", "Позже (при перезагрузке)"),
+                    (di, w) -> executeScopeSubmit(desired, pkg, adding, appName, onUiDone, false));
+            dlg.setCancelable(false);
+            dlg.show();
+        } else {
+            executeScopeSubmit(desired, pkg, adding, appName, onUiDone, false);
+        }
+    }
+
+    /**
+     * 真正执行作用域写入。
+     *
+     * @param softReboot true=官方分支框架软重启（脚本脱离 App 执行，App 随即被杀，无结果回调）；
+     *                   false=Vector 即时写入，或官方「稍后」的 4.6.1 进程内重启。
+     */
+    private void executeScopeSubmit(final java.util.Set<String> desired, final String pkg,
+                                    final boolean adding, final String appName,
+                                    final Runnable onUiDone, final boolean softReboot) {
         pickerApplying = true;
         final android.app.ProgressDialog pd = new android.app.ProgressDialog(this);
-        pd.setMessage(t("正在写入作用域并应用…（约 10-30 秒，期间管理器可能打不开）",
-                "Writing scope and applying… (10-30s, manager may be unavailable meanwhile)",
-                "Запись области и применение… (10-30с, менеджер может быть недоступен)"));
+        if (softReboot) {
+            pd.setMessage(t("正在写入作用域并重启框架…（约 1 分钟，屏幕将变黑，请勿操作手机）",
+                    "Writing scope and restarting framework… (about 1 min; screen goes black, do not operate)",
+                    "Запись области и перезапуск фреймворка… (около 1 мин; экран погаснет, не трогайте телефон)"));
+        } else {
+            pd.setMessage(t("正在写入作用域并应用…（约 10-30 秒，期间管理器可能打不开）",
+                    "Writing scope and applying… (10-30s, manager may be unavailable meanwhile)",
+                    "Запись области и применение… (10-30с, менеджер может быть недоступен)"));
+        }
         pd.setCancelable(false);
         pd.show();
         new Thread(() -> {
-            boolean ok = rootScope.syncScope(desired);
+            boolean ok = rootScope.syncScope(desired, softReboot);
+            if (softReboot) {
+                if (ok) {
+                    // 脚本已脱离 App 执行，zygote 几秒后重启，本进程会被杀死。
+                    // 保存期望集合，App 重启后读库自动对账（applyPendingScopeIfNeeded）。
+                    Config.setPendingTargets(MainActivity.this, desired);
+                    // 停掉目标进程（能赶上就赶，赶不上软重启也会杀光所有进程）
+                    rootScope.forceStop(pkg);
+                    try { Thread.sleep(8000); } catch (InterruptedException ignored) {}
+                    // 8 秒后若仍未被杀（软重启可能延后），界面回到重启中提示
+                    runOnUiThread(() -> {
+                        try { pd.dismiss(); } catch (Throwable ignored) {}
+                        pickerApplying = false;
+                        showApplyingState();
+                        scheduleScopeRefresh();
+                    });
+                } else {
+                    Config.setPendingTargets(MainActivity.this, desired);
+                    runOnUiThread(() -> {
+                        try { pd.dismiss(); } catch (Throwable ignored) {}
+                        pickerApplying = false;
+                        Toast.makeText(MainActivity.this,
+                                t("框架重启启动失败，操作已排队，请稍后重试或重启手机",
+                                        "Failed to start framework restart; change queued, retry later or reboot",
+                                        "Не удалось запустить перезапуск; изменение в очереди, повторите позже или перезагрузите"),
+                                Toast.LENGTH_LONG).show();
+                    });
+                }
+                return;
+            }
             if (!ok) {
                 // 等待重启窗口/繁忙过去，重试一次
                 try { Thread.sleep(15000); } catch (InterruptedException ignored) {}
@@ -1439,6 +1543,8 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
             final boolean fok = ok;
+            final boolean officialDefer = ok
+                    && (fwInfo != null ? fwInfo.isOfficial() : fwInfoLastGood != null && fwInfoLastGood.isOfficial());
             runOnUiThread(() -> {
                 pickerApplying = false;
                 try { pd.dismiss(); } catch (Throwable ignored) {}
@@ -1446,7 +1552,11 @@ public class MainActivity extends AppCompatActivity {
                 refreshAppList();
                 String msg;
                 if (fok) {
-                    if (adding) {
+                    if (officialDefer) {
+                        msg = t("已写入，下次重启手机后生效；重启前管理器可能无法打开",
+                                "Saved; takes effect after next phone reboot (manager may be unavailable until then)",
+                                "Сохранено; применится после перезагрузки телефона (до неё менеджер может быть недоступен)");
+                    } else if (adding) {
                         msg = t("已注入✓，重新打开该应用即生效",
                                 "Injected✓; reopen the app to take effect",
                                 "Внедрено✓; перезапустите приложение");
@@ -2247,7 +2357,7 @@ public class MainActivity extends AppCompatActivity {
                                     androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(pi))
                             .append(")\n");
                 } catch (Exception e) {
-                    devInfo.append("Module Version: 4.6.1 (versionCode 461)\n");
+                    devInfo.append("Module Version: 4.6.2 (versionCode 462)\n");
                 }
                 devInfo.append("Language: ").append(currentLang).append("\n");
                 // Root 状态
@@ -2558,7 +2668,7 @@ public class MainActivity extends AppCompatActivity {
     private void showAboutDialog() {
         new AlertDialog.Builder(this)
                 .setTitle("DeviceResetSpoofer")
-                .setMessage(t("版本：4.6.1\n\n自动识别官方 LSPosed 与 JingMatrix/Vector 双分支的设备伪装模块，主页额头显示「已连接 XX」。\n\n在「应用」页点「＋选择应用」点选目标：Vector 经 cli 即时生效、官方经优雅停机+直写库+重启守护进程几秒内生效（串行化、不重复拉起），均无需点通知 → 打开详情「随机」或「自定义」→ 重新打开目标应用即生效；绿色「已注入✓」即已生效。长按删除会同步移除框架作用域；框架繁忙时操作自动排队，恢复后补写。\n支持中文 / English / Русский",
+                .setMessage(t("版本：4.6.2\n\n自动识别官方 LSPosed 与 JingMatrix/Vector 双分支的设备伪装模块，主页额头显示「已连接 XX」。\n\n在「应用」页点「＋选择应用」点选目标：Vector 经 cli 即时生效；官方分支直写库后执行「框架软重启」（zygote 重启，约 1 分钟，不重启手机）重建桥接，解决管理器打不开/框架未连接问题，重启后管理器可正常打开。打开详情「随机」或「自定义」→ 重新打开目标应用即生效；绿色「已注入✓」即已生效。长按删除会同步移除框架作用域；框架繁忙时操作自动排队。\n支持中文 / English / Русский",
                         "Version: 4.6.1\n\nDevice spoofing module that auto-detects both official LSPosed and JingMatrix/Vector; the home header shows \"Connected to XX\".\n\nOn the Apps tab tap \"+ Select App\": Vector applies instantly via cli, official via graceful stop + direct-write + daemon restart in a few seconds (serialized, no duplicate spawns) — no notification tap -> open its detail, Random / Customize -> reopen the app; a green \"Injected✓\" means it is active. Long-press remove also drops the framework scope; changes are queued and retried automatically when the framework is busy.\nSupports Chinese / English / Russian",
                         "Версия: 4.6.1\n\nМодуль подмены устройства, автоматически определяющий официальный LSPosed и JingMatrix/Vector; в шапке главной страницы отображается «Подключено к XX».\n\nНа вкладке «Приложения» нажмите «+ Выбрать приложение»: Vector применяется мгновенно через cli, официальный — через корректную остановку, прямую запись и перезапуск демона за несколько секунд (серийно, без повторных запусков), без нажатия на уведомление -> откройте детали, «Случайно»/«Настроить» -> перезапустите приложение; зелёное «Внедрено✓» означает, что модуль активен. Долгое нажатие для удаления также убирает область фреймворка; при занятости фреймворка изменения ставятся в очередь и применяются автоматически.\nПоддерживает 中文 / English / Русский"))
                 .setPositiveButton(t("确定", "OK", "ОК"), null)

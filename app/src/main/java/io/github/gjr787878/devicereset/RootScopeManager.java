@@ -24,16 +24,31 @@ import java.util.Set;
  *       只能直写库后重启守护进程。</li>
  * </ul>
  *
- * <p>4.6.1 可靠性修复（针对「管理器打不开 / 框架未连接 / 重复拉起多实例」）：</p>
+ * <p>4.6.2 关键修复（针对「管理器打不开，只有重启手机才行」的根因）：</p>
  * <ul>
- *   <li>所有框架操作（写作用域、ensureDaemon）由进程内静态锁 + 状态机串行化，
- *       重启窗口内禁止第二次 kill/拉起，杜绝多实例争抢 binder；</li>
- *   <li>停机优先用官方公开命令 {@code lspctl stop} 优雅退出，超时才 TERM/KILL，
- *       避免 SIGKILL 打断 dex2oat 造成半激活；</li>
- *   <li>新库在守护进程<b>完全停止后</b>才拷回（此前是停前先拷，存在 WAL 竞争）；</li>
- *   <li>就绪轮询要求连续 3 次 {@code lspctl status} 成功，最长约 100 秒；</li>
- *   <li>重启失败自动回滚旧库并原样拉起，失败/繁忙通过返回值告知 UI，由 UI 排队重试，
- *       绝不把框架留在半激活状态。</li>
+ *   <li>实锤根因（LSPosed 2.2.1 + Zygisk Next 日志）：lspbridge 桥接在<b>开机时由 zygote
+ *       注入侧建立一次</b>；手动重启 daemon 后，运行中的 zygote/system_server 不会重连新 daemon
+ *       （日志持续刷 {@code no response from bridge}，管理器启动时只能 force-stop shell 再拉起
+ *       却永远拿不到服务）。官方框架自身的恢复逻辑在双 ABI 设备上只会
+ *       {@code ctl.restart zygote_secondary}（32 位副 zygote），不重启承载 system_server 的
+ *       主 zygote，因此桥接永久断裂。只有 zygote 重新注入（手机重启/框架软重启）才能恢复。</li>
+ *   <li>官方分支新流程：{@code lspctl stop} → 写库 → 先拉起新 daemon（创建 lspbridge 套接字）
+ *       → {@code setprop ctl.restart zygote}（+zygote_secondary）触发<b>框架软重启</b>：
+ *       不重启手机、约 1 分钟，zygote 与 system_server 全部重建、zygisk 重新注入、桥接重建；
+ *       若属性被 SELinux 拒绝，兜底 SIGKILL 主 zygote（init 会自动重启）。</li>
+ *   <li>软重启会杀死所有应用进程（含本 App），故完整流程由 {@code setsid} 脱离 App 进程组的
+ *       独立脚本 {@code /data/local/tmp/drs_apply.sh} 执行，结果写入 marker 文件；
+ *       App 重启后读 marker 判定成功/失败。</li>
+ *   <li>用户选择「稍后」时走 4.6.1 的进程内 daemon 重启路径（管理器需等下次手机重启才能打开，
+ *       界面明确提示），不再作为默认路径。</li>
+ * </ul>
+ *
+ * <p>4.6.1 保留的可靠性措施：</p>
+ * <ul>
+ *   <li>所有框架操作（写作用域、ensureDaemon）由进程内静态锁 + 状态机串行化；</li>
+ *   <li>停机优先用官方公开命令 {@code lspctl stop} 优雅退出，超时才 TERM/KILL；</li>
+ *   <li>新库在守护进程<b>完全停止后</b>才拷回；</li>
+ *   <li>就绪轮询要求连续 3 次 {@code lspctl status} 成功。</li>
  * </ul>
  *
  * <p>作用域中系统框架只写 {@code system}（加载时 packageName 才是 {@code android}）。
@@ -45,6 +60,13 @@ public final class RootScopeManager {
     private static final String MODULE_PKG = "io.github.gjr787878.devicereset";
     private static final int USER_ID = 0;
     private static final String LIVE_DB = "/data/adb/lspd/config/modules_config.db";
+
+    /** 4.6.2 框架软重启独立脚本（setsid 脱离 App，App 被 zygote 重启杀死后仍执行）。 */
+    public static final String APPLY_SCRIPT_PATH = "/data/local/tmp/drs_apply.sh";
+    /** 软重启结果 marker：START / DB_WRITTEN / CTRL_RESTART_SENT / RESTART_OK / RESTART_FAIL。 */
+    public static final String REBOOT_MARKER_PATH = "/data/local/tmp/drs_soft_reboot.marker";
+    /** 软重启脚本日志。 */
+    public static final String APPLY_LOG_PATH = "/data/local/tmp/drs_soft_reboot.log";
 
     /** 等价于 android.database.sqlite.DISABLE_WAL（@hide 常量，数值 0x02000000）。 */
     private static final int DISABLE_WAL = 0x02000000;
@@ -275,10 +297,19 @@ public final class RootScopeManager {
 
     /**
      * 把本模块作用域全量同步为 {@code targetPkgs}（系统框架 system 始终保留）。
-     * 自动按分支选择方案：Vector 走 cli（无重启）；官方走直写 + 优雅停机 + 重启（失败自动回滚）。
-     * 全程串行：重启窗口内重复调用返回 false（UI 应排队稍后重试）。
+     * 自动按分支选择方案：Vector 走 cli（无重启）；官方走 4.6.1 进程内 daemon 重启（管理器仍需
+     * 手机重启才能打开，仅用于用户选择「稍后」时）。
      */
     public boolean syncScope(Set<String> targetPkgs) {
+        return syncScope(targetPkgs, false);
+    }
+
+    /**
+     * @param softReboot 官方分支专用：true=直写库后触发框架软重启（zygote 重启，推荐，
+     *                   管理器可恢复）；false=只重启 daemon（4.6.1 旧路径，需手机重启）。
+     *                   Vector 分支忽略此参数。
+     */
+    public boolean syncScope(Set<String> targetPkgs, boolean softReboot) {
         synchronized (STATE_LOCK) {
             if (state == STATE_APPLYING) {
                 Log.w(TAG, "syncScope: another framework operation in progress, reject");
@@ -376,12 +407,25 @@ public final class RootScopeManager {
                 return false;
             }
 
-            boolean restarted = stopWriteBackAndRestart(fw);
-            if (restarted) {
-                lastRestartMs = System.currentTimeMillis();
+            boolean restarted;
+            if (softReboot) {
+                // 4.6.2：直写库 + 框架软重启（zygote 重建）。暂存库保留供脱离 App 的独立脚本读取。
+                restarted = launchSoftRebootScript(fw);
+                if (restarted) {
+                    lastRestartMs = System.currentTimeMillis();
+                    Log.i(TAG, "syncScope: soft reboot script launched");
+                    return true;
+                }
+                // 脚本启动失败：清理暂存，走失败排队
+                cleanupStage();
+            } else {
+                restarted = stopWriteBackAndRestart(fw);
+                if (restarted) {
+                    lastRestartMs = System.currentTimeMillis();
+                }
+                cleanupStage();
             }
-            cleanupStage();
-            Log.i(TAG, "syncScope: edited=true restarted=" + restarted);
+            Log.i(TAG, "syncScope: edited=true restarted=" + restarted + " softReboot=" + softReboot);
             return restarted;
         } finally {
             // 重启脚本在 runRoot 内同步执行到就绪确认（或回滚完成）才返回，
@@ -414,12 +458,150 @@ public final class RootScopeManager {
     }
 
     /**
+     * 4.6.2 框架软重启脚本（以 root、setsid 独立会话执行，不依赖本 App 存活——
+     * zygote 重启会杀死所有 App，包括本应用）。
+     *
+     * 参数：$1=模块目录 $2=活库 $3=暂存新库 $4=旧库备份 $5=marker
+     * 关键顺序：停 daemon → 写库 → 先起新 daemon（lspbridge 套接字由 daemon 创建，
+     * 新 zygote 注入侧会以 50ms 间隔反复重连）→ ctl.restart zygote（主 zygote+system_server 重建）
+     * → 属性被拒则 SIGKILL 兜底（init 自动重启）→ 轮询就绪，写 RESTART_OK/FAIL。
+     */
+    private static final String APPLY_SCRIPT =
+            "#!/system/bin/sh\n" +
+            "set +e\n" +
+            "MODDIR=\"$1\"; LIVE=\"$2\"; STAGED=\"$3\"; BACKUP=\"$4\"; MARKER=\"$5\"\n" +
+            "LSPCTL=\"$MODDIR/lspctl\"\n" +
+            "log(){ echo \"$(date '+%m-%d %H:%M:%S') $*\" >> \"$MARKER\"; }\n" +
+            "log START\n" +
+            // 1) 优雅停机
+            "\"$LSPCTL\" stop >/dev/null 2>&1\n" +
+            "i=0\n" +
+            "while pidof lspd >/dev/null 2>&1; do\n" +
+            "  i=$((i+1)); if [ $i -ge 40 ]; then break; fi; sleep 0.2\n" +
+            "done\n" +
+            "if pidof lspd >/dev/null 2>&1; then\n" +
+            "  for p in $(pidof lspd); do kill -TERM \"$p\" 2>/dev/null; done\n" +
+            "  i=0\n" +
+            "  while pidof lspd >/dev/null 2>&1; do\n" +
+            "    i=$((i+1))\n" +
+            "    if [ $i -ge 25 ]; then\n" +
+            "      for p in $(pidof lspd); do kill -KILL \"$p\" 2>/dev/null; done\n" +
+            "      sleep 1; break\n" +
+            "    fi; sleep 0.2\n" +
+            "  done\n" +
+            "fi\n" +
+            "sleep 0.5\n" +
+            // 2) 写库（daemon 已停，无 WAL 竞争）
+            "cp \"$STAGED\" \"$LIVE\"\n" +
+            "rm -f \"$LIVE-wal\" \"$LIVE-shm\"\n" +
+            "chmod 660 \"$LIVE\" 2>/dev/null\n" +
+            "chown root:root \"$LIVE\" 2>/dev/null\n" +
+            "restorecon -F \"$LIVE\" 2>/dev/null\n" +
+            "sync\n" +
+            "log DB_WRITTEN\n" +
+            // 3) 先拉起新 daemon（必须在 zygote 重启前：套接字由 daemon 创建）
+            "cd \"$MODDIR\" || { log FAIL_NO_MODDIR; exit 1; }\n" +
+            "setsid sh ./daemon --force </dev/null >/dev/null 2>&1 &\n" +
+            "sleep 4\n" +
+            // 4) 框架软重启：主 zygote（承载 system_server）+ 32 位副 zygote
+            "if [ -z \"$(pidof zygote64 2>/dev/null)\" ]; then ZNAME=zygote; else ZNAME=zygote64; fi\n" +
+            "ZPID=\"$(pidof \"$ZNAME\" 2>/dev/null)\"\n" +
+            "setprop ctl.restart zygote 2>/dev/null\n" +
+            "sleep 2\n" +
+            "setprop ctl.restart zygote_secondary 2>/dev/null\n" +
+            "log CTRL_RESTART_SENT\n" +
+            // 5) 等待 20 秒，主 zygote pid 未变说明属性被拒，SIGKILL 兜底
+            "i=0\n" +
+            "while [ $i -lt 20 ]; do\n" +
+            "  i=$((i+1)); sleep 1\n" +
+            "  NZPID=\"$(pidof \"$ZNAME\" 2>/dev/null)\"\n" +
+            "  if [ -n \"$NZPID\" ] && [ \"$NZPID\" != \"$ZPID\" ]; then log ZYGOTE_RESTARTED; break; fi\n" +
+            "done\n" +
+            "NZPID=\"$(pidof \"$ZNAME\" 2>/dev/null)\"\n" +
+            "if [ \"$NZPID\" = \"$ZPID\" ]; then\n" +
+            "  log CTRL_RESTART_NO_EFFECT_KILL_FALLBACK\n" +
+            "  killall -9 \"$ZNAME\" 2>/dev/null\n" +
+            "  sleep 2\n" +
+            "  killall -9 zygote_secondary 2>/dev/null\n" +
+            "fi\n" +
+            // 6) 就绪轮询：软重启约 30-90s，连续 3 次 status 成功（最长 180s）
+            "i=0; streak=0\n" +
+            "while [ $i -lt 180 ]; do\n" +
+            "  i=$((i+1)); sleep 1\n" +
+            "  if pidof lspd >/dev/null 2>&1 && \"$LSPCTL\" status >/dev/null 2>&1; then\n" +
+            "    streak=$((streak+1))\n" +
+            "    if [ $streak -ge 3 ]; then log RESTART_OK; exit 0; fi\n" +
+            "  else streak=0; fi\n" +
+            "done\n" +
+            "log RESTART_FAIL\n" +
+            "exit 1\n";
+
+    /**
+     * 把 APPLY_SCRIPT 写盘并以 setsid 独立会话启动（软重启模式）。
+     * 启动后轮询 marker 直到看到 START，确认脚本已脱离 App 开始执行。
+     * 暂存库在 App 被杀死后仍留在 filesDir，由 root 脚本继续读取。
+     */
+    private boolean launchSoftRebootScript(FrameworkDetector.Info fw) {
+        // 写脚本（heredoc 引号包裹，禁止任何变量展开）
+        String writeScript =
+                "cat > '" + APPLY_SCRIPT_PATH + "' <<'DRS_EOF'\n" + APPLY_SCRIPT + "DRS_EOF\n" +
+                "chmod 755 '" + APPLY_SCRIPT_PATH + "'\n" +
+                "rm -f '" + REBOOT_MARKER_PATH + "'\n" +
+                "echo SCRIPT_READY\n";
+        Result w = runRoot(writeScript);
+        if (!w.output.contains("SCRIPT_READY")) {
+            Log.e(TAG, "launchSoftRebootScript: write script failed: " + w.output);
+            return false;
+        }
+        String launch =
+                "setsid sh '" + APPLY_SCRIPT_PATH + "' '" + fw.moduleDir + "' '" + LIVE_DB
+                        + "' '" + SDB + "' '" + BACKUP_DB + "' '" + REBOOT_MARKER_PATH
+                        + "' </dev/null >'" + APPLY_LOG_PATH + "' 2>&1 &\n" +
+                "echo LAUNCHED\n";
+        Result r = runRoot(launch);
+        if (!r.output.contains("LAUNCHED")) {
+            Log.e(TAG, "launchSoftRebootScript: launch failed: " + r.output);
+            return false;
+        }
+        // 确认脚本已启动（marker 出现 START）
+        for (int i = 0; i < 25; i++) {
+            try { Thread.sleep(200); } catch (InterruptedException ignored) { return false; }
+            Result m = runRoot("cat '" + REBOOT_MARKER_PATH + "' 2>/dev/null");
+            if (m.output.contains("START")) {
+                Log.i(TAG, "launchSoftRebootScript: marker START seen");
+                return true;
+            }
+        }
+        Log.e(TAG, "launchSoftRebootScript: no START marker after 5s");
+        return false;
+    }
+
+    /**
+     * 读取软重启 marker 最新状态：返回 null（无 marker）或最后一行内容。
+     * 含 RESTART_OK / RESTART_FAIL / START / DB_WRITTEN / CTRL_RESTART_SENT / ZYGOTE_RESTARTED。
+     */
+    public String readRebootMarker() {
+        Result r = runRoot("tail -1 '" + REBOOT_MARKER_PATH + "' 2>/dev/null");
+        if (r == null || r.output == null) return null;
+        String s = r.output.trim();
+        return s.isEmpty() ? null : s;
+    }
+
+    /** 软重启结束（成功/失败）后清理 marker、脚本与暂存库。 */
+    public void clearRebootArtifacts() {
+        runRoot("rm -f '" + REBOOT_MARKER_PATH + "' '" + APPLY_SCRIPT_PATH + "' '" + APPLY_LOG_PATH + "'");
+        cleanupStage();
+    }
+
+    /**
      * 官方分支完整闭环（单 root 会话内，串行锁保护）：
      * 1. 先用官方公开命令 {@code lspctl stop} 优雅停机，等待死亡；无响应再 TERM/KILL；
      * 2. 守护进程完全停止后，拷回新库（无 WAL 竞争）+ chmod/chown/restorecon + sync；
      * 3. 复刻官方 service.sh：cd 模块目录 + setsid 起 daemon --force；
      * 4. pidof + lspctl status 轮询，连续 3 次成功才算就绪（约 100 秒，覆盖首次 dex2oat）；
      * 5. 成功 RESTART_OK；失败则恢复旧库、重新拉起并等待，输出 RESTART_FAIL（不留下半激活）。
+     * 注意：此路径（4.6.1）后管理器桥接仍断裂，需手机重启才能打开管理器；仅用于用户选择
+     * 「稍后」时。默认应走 {@link #launchSoftRebootScript}（4.6.2 框架软重启）。
      */
     private boolean stopWriteBackAndRestart(FrameworkDetector.Info fw) {
         final String daemon = fw.moduleDir + "daemon";
