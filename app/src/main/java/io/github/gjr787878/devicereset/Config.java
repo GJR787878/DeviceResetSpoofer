@@ -361,6 +361,28 @@ public class Config {
         setTargetPackages(context, packages);
     }
 
+    // ===== 待应用的作用域（框架繁忙/重启失败时排队，下次检测到框架空闲自动补写） =====
+    private static final String KEY_PENDING_TARGETS = "pending_targets";
+
+    /** 保存"期望的作用域集合"，供框架恢复空闲后自动补写；null 表示无待办。 */
+    public static void setPendingTargets(Context context, Set<String> packages) {
+        if (packages == null) {
+            getPrefs(context).edit().remove(KEY_PENDING_TARGETS).apply();
+        } else {
+            getPrefs(context).edit().putStringSet(KEY_PENDING_TARGETS, new HashSet<>(packages)).apply();
+        }
+    }
+
+    /** 是否有排队等待写入的作用域。 */
+    public static boolean hasPendingTargets(Context context) {
+        return getPrefs(context).contains(KEY_PENDING_TARGETS);
+    }
+
+    /** 读取待应用的作用域集合（读取后不移除，由调用方成功后清除）。 */
+    public static Set<String> getPendingTargets(Context context) {
+        return getPrefs(context).getStringSet(KEY_PENDING_TARGETS, null);
+    }
+
     public static boolean isTargetPackage(Context context, String packageName) {
         return getTargetPackages(context).contains(packageName);
     }

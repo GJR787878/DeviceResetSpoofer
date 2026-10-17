@@ -21,16 +21,23 @@ import java.util.Set;
  *       ADB 来源门），由守护进程在自己内存里写库 + 刷 ConfigCache，<b>无需重启、即时生效</b>。</li>
  *   <li><b>官方 LSPosed</b>：{@code lspctl} 的写作用域命令被开发者模式 + CliOriginVerifier
  *       （{@code z1.b}，要求调用进程祖先链含 adbd 且有 ADB 连接）挡住，App 无人值守无法通过，
- *       只能直写库后重启守护进程。重启严格复刻官方 {@code service.sh} 的
- *       {@code daemon --force}，就绪轮询放宽到约 90 秒（覆盖首次 dex2oat），并在失败时
- *       自动恢复旧库、重新拉起，<b>绝不把框架留在半激活状态</b>。</li>
+ *       只能直写库后重启守护进程。</li>
  * </ul>
  *
- * <p>作用域中系统框架只写 {@code system}（加载时 packageName 才是 {@code android}），
- * 不再写冗余的 {@code android} 行。只操作本模块自己的行，其他模块完全不受影响。</p>
+ * <p>4.6.1 可靠性修复（针对「管理器打不开 / 框架未连接 / 重复拉起多实例」）：</p>
+ * <ul>
+ *   <li>所有框架操作（写作用域、ensureDaemon）由进程内静态锁 + 状态机串行化，
+ *       重启窗口内禁止第二次 kill/拉起，杜绝多实例争抢 binder；</li>
+ *   <li>停机优先用官方公开命令 {@code lspctl stop} 优雅退出，超时才 TERM/KILL，
+ *       避免 SIGKILL 打断 dex2oat 造成半激活；</li>
+ *   <li>新库在守护进程<b>完全停止后</b>才拷回（此前是停前先拷，存在 WAL 竞争）；</li>
+ *   <li>就绪轮询要求连续 3 次 {@code lspctl status} 成功，最长约 100 秒；</li>
+ *   <li>重启失败自动回滚旧库并原样拉起，失败/繁忙通过返回值告知 UI，由 UI 排队重试，
+ *       绝不把框架留在半激活状态。</li>
+ * </ul>
  *
- * <p>暂存目录放在模块私有 filesDir（root 拷出后 chown 回本应用 uid、restorecon）；不依赖设备
- * sqlite3。打开暂存库时显式 DISABLE_WAL，避免产生 -wal 导致拷回丢数据。</p>
+ * <p>作用域中系统框架只写 {@code system}（加载时 packageName 才是 {@code android}）。
+ * 只操作本模块自己的行，其他模块完全不受影响。</p>
  */
 public final class RootScopeManager {
 
@@ -41,6 +48,31 @@ public final class RootScopeManager {
 
     /** 等价于 android.database.sqlite.DISABLE_WAL（@hide 常量，数值 0x02000000）。 */
     private static final int DISABLE_WAL = 0x02000000;
+
+    // ====================== 全局状态机（跨 Activity，进程内串行） ======================
+    /** 空闲：无框架操作。 */
+    public static final int STATE_IDLE = 0;
+    /** 应用中：正在写库/重启守护进程（读状态与二次写入都必须避让）。 */
+    public static final int STATE_APPLYING = 1;
+    private static final Object STATE_LOCK = new Object();
+    private static volatile int state = STATE_IDLE;
+    /** 最近一次由本模块重启守护进程的时间戳；冷却期内 ensureDaemon 不重复拉起。 */
+    private static volatile long lastRestartMs = 0L;
+    /** 重启后冷却时长（ms）：就绪轮询最长约 100s，留足余量。 */
+    private static final long POST_RESTART_COOLDOWN_MS = 120_000L;
+
+    /** 是否有作用域写入正在进行（写库/重启窗口）。 */
+    public static boolean isApplying() {
+        synchronized (STATE_LOCK) {
+            return state == STATE_APPLYING;
+        }
+    }
+
+    private static void setStateIdle() {
+        synchronized (STATE_LOCK) {
+            state = STATE_IDLE;
+        }
+    }
 
     private final Context context;
     private final int appUid;
@@ -177,8 +209,12 @@ public final class RootScopeManager {
 
     // ============================== 读取作用域 ==============================
 
-    /** 读取本模块当前作用域包名集合。失败返回 null。 */
+    /** 读取本模块当前作用域包名集合。失败返回 null。应用中（重启窗口）调用直接返回 null。 */
     public Set<String> readScope() {
+        if (isApplying()) {
+            Log.i(TAG, "readScope: framework applying, skip read to avoid half-written db");
+            return null;
+        }
         if (!stageFromDevice(LIVE_DB)) { Log.e(TAG, "readScope: stageFromDevice failed"); return null; }
         Set<String> scope = new LinkedHashSet<>();
         SQLiteDatabase sql = null;
@@ -239,101 +275,120 @@ public final class RootScopeManager {
 
     /**
      * 把本模块作用域全量同步为 {@code targetPkgs}（系统框架 system 始终保留）。
-     * 自动按分支选择方案：Vector 走 cli（无重启）；官方走直写 + 重启（失败自动回滚）。
+     * 自动按分支选择方案：Vector 走 cli（无重启）；官方走直写 + 优雅停机 + 重启（失败自动回滚）。
+     * 全程串行：重启窗口内重复调用返回 false（UI 应排队稍后重试）。
      */
     public boolean syncScope(Set<String> targetPkgs) {
-        FrameworkDetector.Info fw = FrameworkDetector.detect();
-        if (fw.flavor == FrameworkDetector.FLAVOR_NONE) {
-            Log.e(TAG, "syncScope: framework not detected"); return false;
-        }
-
-        // ---- Vector：cli 直写（守护进程内部处理，零重启）----
-        if (fw.cliWritesUsable()) {
-            boolean ok = applyViaCli(fw.cli, targetPkgs);
-            Log.i(TAG, "syncScope via cli (Vector): " + ok
-                    + ", targets=" + (targetPkgs == null ? 0 : targetPkgs.size()));
-            return ok;
-        }
-
-        // ---- 官方：直写库 + 重启守护进程 ----
-        Log.i(TAG, "syncScope via direct-write+restart (official LSPosed)");
-        Set<String> fullScope = new LinkedHashSet<>();
-        fullScope.add("system"); // 系统框架只写 system（不写 android）
-        if (targetPkgs != null) fullScope.addAll(targetPkgs);
-
-        if (!stageFromDevice(LIVE_DB)) return false;
-
-        boolean edited;
-        SQLiteDatabase sql = null;
-        try {
-            sql = SQLiteDatabase.openDatabase(SDB, null,
-                    SQLiteDatabase.OPEN_READWRITE | DISABLE_WAL);
-            int schema = detectSchema(sql);
-            Log.i(TAG, "syncScope: schema=" + schema + ", fullScope=" + fullScope.size());
-            sql.beginTransaction();
-            try {
-                String apk = context.getPackageManager()
-                        .getApplicationInfo(MODULE_PKG, 0).sourceDir;
-                if (schema == 2) {
-                    Long mid = getModuleMidV2(sql);
-                    if (mid == null) {
-                        sql.execSQL(
-                                "INSERT INTO modules (module_pkg_name, apk_path, enabled, auto_include) VALUES (?,?,1,0)",
-                                new Object[]{MODULE_PKG, apk});
-                        mid = getModuleMidV2(sql);
-                    } else {
-                        sql.execSQL("UPDATE modules SET enabled=1 WHERE mid=?", new Object[]{mid});
-                    }
-                    if (mid == null) throw new IllegalStateException("no mid after insert");
-                    sql.execSQL("DELETE FROM scope WHERE mid=? AND user_id=?",
-                            new Object[]{mid, USER_ID});
-                    for (String pkg : fullScope) {
-                        if (pkg == null || pkg.isEmpty()) continue;
-                        sql.execSQL("INSERT INTO scope (mid, app_pkg_name, user_id) VALUES (?,?,?)",
-                                new Object[]{mid, pkg, USER_ID});
-                    }
-                } else if (schema == 1) {
-                    sql.execSQL("INSERT OR IGNORE INTO modules (module_pkg_name, apk_path) VALUES (?,?)",
-                            new Object[]{MODULE_PKG, apk});
-                    sql.execSQL(
-                            "INSERT OR IGNORE INTO modules_state (module_pkg_name, user_id, enabled, scope_request_blocked) VALUES (?,?,1,0)",
-                            new Object[]{MODULE_PKG, USER_ID});
-                    sql.execSQL(
-                            "UPDATE modules_state SET enabled=1 WHERE module_pkg_name=? AND user_id=?",
-                            new Object[]{MODULE_PKG, USER_ID});
-                    sql.execSQL("DELETE FROM scope WHERE module_pkg_name=? AND user_id=?",
-                            new Object[]{MODULE_PKG, USER_ID});
-                    for (String pkg : fullScope) {
-                        if (pkg == null || pkg.isEmpty()) continue;
-                        sql.execSQL(
-                                "INSERT INTO scope (module_pkg_name, app_pkg_name, user_id) VALUES (?,?,?)",
-                                new Object[]{MODULE_PKG, pkg, USER_ID});
-                    }
-                } else {
-                    throw new IllegalStateException("unknown schema");
-                }
-                sql.setTransactionSuccessful();
-                edited = true;
-            } finally {
-                sql.endTransaction();
+        synchronized (STATE_LOCK) {
+            if (state == STATE_APPLYING) {
+                Log.w(TAG, "syncScope: another framework operation in progress, reject");
+                return false;
             }
-        } catch (Throwable t) {
-            Log.e(TAG, "syncScope edit", t);
-            edited = false;
-        } finally {
-            if (sql != null) try { sql.close(); } catch (Throwable ignored) {}
+            state = STATE_APPLYING;
         }
+        try {
+            FrameworkDetector.Info fw = FrameworkDetector.detect();
+            if (fw.flavor == FrameworkDetector.FLAVOR_NONE) {
+                Log.e(TAG, "syncScope: framework not detected");
+                return false;
+            }
 
-        if (!edited) {
+            // ---- Vector：cli 直写（守护进程内部处理，零重启）----
+            if (fw.cliWritesUsable()) {
+                boolean ok = applyViaCli(fw.cli, targetPkgs);
+                Log.i(TAG, "syncScope via cli (Vector): " + ok
+                        + ", targets=" + (targetPkgs == null ? 0 : targetPkgs.size()));
+                return ok;
+            }
+
+            // ---- 官方：直写库 + 优雅停机 + 重启守护进程 ----
+            Log.i(TAG, "syncScope via direct-write+restart (official LSPosed)");
+            Set<String> fullScope = new LinkedHashSet<>();
+            fullScope.add("system"); // 系统框架只写 system（不写 android）
+            if (targetPkgs != null) fullScope.addAll(targetPkgs);
+
+            if (!stageFromDevice(LIVE_DB)) return false;
+
+            boolean edited;
+            SQLiteDatabase sql = null;
+            try {
+                sql = SQLiteDatabase.openDatabase(SDB, null,
+                        SQLiteDatabase.OPEN_READWRITE | DISABLE_WAL);
+                int schema = detectSchema(sql);
+                Log.i(TAG, "syncScope: schema=" + schema + ", fullScope=" + fullScope.size());
+                sql.beginTransaction();
+                try {
+                    String apk = context.getPackageManager()
+                            .getApplicationInfo(MODULE_PKG, 0).sourceDir;
+                    if (schema == 2) {
+                        Long mid = getModuleMidV2(sql);
+                        if (mid == null) {
+                            sql.execSQL(
+                                    "INSERT INTO modules (module_pkg_name, apk_path, enabled, auto_include) VALUES (?,?,1,0)",
+                                    new Object[]{MODULE_PKG, apk});
+                            mid = getModuleMidV2(sql);
+                        } else {
+                            sql.execSQL("UPDATE modules SET enabled=1 WHERE mid=?", new Object[]{mid});
+                        }
+                        if (mid == null) throw new IllegalStateException("no mid after insert");
+                        sql.execSQL("DELETE FROM scope WHERE mid=? AND user_id=?",
+                                new Object[]{mid, USER_ID});
+                        for (String pkg : fullScope) {
+                            if (pkg == null || pkg.isEmpty()) continue;
+                            sql.execSQL("INSERT INTO scope (mid, app_pkg_name, user_id) VALUES (?,?,?)",
+                                    new Object[]{mid, pkg, USER_ID});
+                        }
+                    } else if (schema == 1) {
+                        sql.execSQL("INSERT OR IGNORE INTO modules (module_pkg_name, apk_path) VALUES (?,?)",
+                                new Object[]{MODULE_PKG, apk});
+                        sql.execSQL(
+                                "INSERT OR IGNORE INTO modules_state (module_pkg_name, user_id, enabled, scope_request_blocked) VALUES (?,?,1,0)",
+                                new Object[]{MODULE_PKG, USER_ID});
+                        sql.execSQL(
+                                "UPDATE modules_state SET enabled=1 WHERE module_pkg_name=? AND user_id=?",
+                                new Object[]{MODULE_PKG, USER_ID});
+                        sql.execSQL("DELETE FROM scope WHERE module_pkg_name=? AND user_id=?",
+                                new Object[]{MODULE_PKG, USER_ID});
+                        for (String pkg : fullScope) {
+                            if (pkg == null || pkg.isEmpty()) continue;
+                            sql.execSQL(
+                                    "INSERT INTO scope (module_pkg_name, app_pkg_name, user_id) VALUES (?,?,?)",
+                                    new Object[]{MODULE_PKG, pkg, USER_ID});
+                        }
+                    } else {
+                        throw new IllegalStateException("unknown schema");
+                    }
+                    sql.setTransactionSuccessful();
+                    edited = true;
+                } finally {
+                    sql.endTransaction();
+                }
+            } catch (Throwable t) {
+                Log.e(TAG, "syncScope edit", t);
+                edited = false;
+            } finally {
+                if (sql != null) try { sql.close(); } catch (Throwable ignored) {}
+            }
+
+            if (!edited) {
+                cleanupStage();
+                Log.e(TAG, "syncScope: edit failed, abort");
+                return false;
+            }
+
+            boolean restarted = stopWriteBackAndRestart(fw);
+            if (restarted) {
+                lastRestartMs = System.currentTimeMillis();
+            }
             cleanupStage();
-            Log.e(TAG, "syncScope: edit failed, abort");
-            return false;
+            Log.i(TAG, "syncScope: edited=true restarted=" + restarted);
+            return restarted;
+        } finally {
+            // 重启脚本在 runRoot 内同步执行到就绪确认（或回滚完成）才返回，
+            // 此时守护进程与配置库都已稳定，直接释放锁即可；
+            // 重启后的冷却由 lastRestartMs 保护 ensureDaemon 不重复拉起。
+            setStateIdle();
         }
-
-        boolean restarted = stopWriteBackAndRestart(fw);
-        cleanupStage();
-        Log.i(TAG, "syncScope: edited=true restarted=" + restarted);
-        return restarted;
     }
 
     /**
@@ -359,29 +414,42 @@ public final class RootScopeManager {
     }
 
     /**
-     * 完整重启闭环（全部在一个 root 会话内）：
-     * 1. SIGTERM 停旧守护进程（超时 SIGKILL）；
-     * 2. 拷回新库（权限/restorecon 与 live 一致）+ sync；
-     * 3. setsid 起新守护进程（复刻官方 service.sh 的 daemon --force）；
-     * 4. lspctl status 轮询直到就绪（约 90 秒，覆盖首次 dex2oat）；
-     * 5. 成功 RESTART_OK；失败则恢复旧库、重新拉起，输出 RESTART_FAIL（不留下半激活）。
+     * 官方分支完整闭环（单 root 会话内，串行锁保护）：
+     * 1. 先用官方公开命令 {@code lspctl stop} 优雅停机，等待死亡；无响应再 TERM/KILL；
+     * 2. 守护进程完全停止后，拷回新库（无 WAL 竞争）+ chmod/chown/restorecon + sync；
+     * 3. 复刻官方 service.sh：cd 模块目录 + setsid 起 daemon --force；
+     * 4. pidof + lspctl status 轮询，连续 3 次成功才算就绪（约 100 秒，覆盖首次 dex2oat）；
+     * 5. 成功 RESTART_OK；失败则恢复旧库、重新拉起并等待，输出 RESTART_FAIL（不留下半激活）。
      */
     private boolean stopWriteBackAndRestart(FrameworkDetector.Info fw) {
-        String daemon = fw.moduleDir + "daemon";
-        String lspctl = fw.moduleDir + "lspctl";
-        String script =
+        final String daemon = fw.moduleDir + "daemon";
+        final String lspctl = fw.moduleDir + "lspctl";
+        final String script =
                 "set +e\n" +
-                "for p in $(pidof lspd); do kill -TERM \"$p\" 2>/dev/null; done\n" +
+                // 1) 优雅停机：官方公开命令 lspctl stop（无来源门）
+                "'" + lspctl + "' stop >/dev/null 2>&1\n" +
                 "i=0\n" +
                 "while pidof lspd >/dev/null 2>&1; do\n" +
                 "  i=$((i+1))\n" +
-                "  if [ $i -ge 25 ]; then\n" +
-                "    for p in $(pidof lspd); do kill -KILL \"$p\" 2>/dev/null; done\n" +
-                "    sleep 0.5; break\n" +
-                "  fi\n" +
+                "  if [ $i -ge 40 ]; then break; fi\n" +  // 8 秒优雅等待
                 "  sleep 0.2\n" +
                 "done\n" +
+                // 2) 仍存活：TERM 5 秒，再 KILL
+                "if pidof lspd >/dev/null 2>&1; then\n" +
+                "  for p in $(pidof lspd); do kill -TERM \"$p\" 2>/dev/null; done\n" +
+                "  i=0\n" +
+                "  while pidof lspd >/dev/null 2>&1; do\n" +
+                "    i=$((i+1))\n" +
+                "    if [ $i -ge 25 ]; then\n" +
+                "      for p in $(pidof lspd); do kill -KILL \"$p\" 2>/dev/null; done\n" +
+                "      sleep 1; break\n" +
+                "    fi\n" +
+                "    sleep 0.2\n" +
+                "  done\n" +
+                "fi\n" +
+                "sleep 0.5\n" +
                 "echo OLD_STOPPED\n" +
+                // 3) 守护进程已停止 → 拷回新库（此时无进程持有 WAL）
                 "cp '" + SDB + "' '" + LIVE_DB + "'\n" +
                 "rm -f '" + LIVE_DB + "-wal' '" + LIVE_DB + "-shm'\n" +
                 "chmod 660 '" + LIVE_DB + "' 2>/dev/null\n" +
@@ -389,32 +457,47 @@ public final class RootScopeManager {
                 "restorecon -F '" + LIVE_DB + "' 2>/dev/null\n" +
                 "sync\n" +
                 "echo DB_WRITTEN\n" +
-                "setsid sh '" + daemon + "' --force </dev/null >/dev/null 2>&1 &\n" +
+                // 4) 复刻官方 service.sh：cd 模块目录 + setsid 独立会话
+                "cd '" + fw.moduleDir + "'\n" +
+                "setsid sh ./daemon --force </dev/null >/dev/null 2>&1 &\n" +
                 "echo NEW_LAUNCHED\n" +
+                // 5) 就绪轮询：pidof 存活且连续 3 次 lspctl status 成功
                 "i=0\n" +
                 "ok=0\n" +
-                "until '" + lspctl + "' status >/dev/null 2>&1; do\n" +
+                "streak=0\n" +
+                "while [ $i -lt 100 ]; do\n" +
                 "  i=$((i+1))\n" +
-                "  if [ $i -ge 60 ]; then break; fi\n" +
                 "  sleep 1\n" +
+                "  if pidof lspd >/dev/null 2>&1 && '" + lspctl + "' status >/dev/null 2>&1; then\n" +
+                "    streak=$((streak+1))\n" +
+                "    if [ $streak -ge 3 ]; then ok=1; break; fi\n" +
+                "  else\n" +
+                "    streak=0\n" +
+                "  fi\n" +
                 "done\n" +
-                "if pidof lspd >/dev/null 2>&1 && '" + lspctl + "' status >/dev/null 2>&1; then ok=1; fi\n" +
                 "if [ $ok -eq 1 ]; then echo RESTART_OK; exit 0; fi\n" +
+                // 6) 失败：KILL 新进程 → 恢复旧库 → 原样拉起并等待
                 "echo RESTART_FAIL, restoring previous db\n" +
                 "for p in $(pidof lspd); do kill -KILL \"$p\" 2>/dev/null; done\n" +
-                "sleep 0.5\n" +
+                "sleep 1\n" +
                 "cp '" + BACKUP_DB + "' '" + LIVE_DB + "'\n" +
                 "chmod 660 '" + LIVE_DB + "' 2>/dev/null\n" +
                 "chown root:root '" + LIVE_DB + "' 2>/dev/null\n" +
                 "restorecon -F '" + LIVE_DB + "' 2>/dev/null\n" +
                 "sync\n" +
-                "setsid sh '" + daemon + "' --force </dev/null >/dev/null 2>&1 &\n" +
+                "cd '" + fw.moduleDir + "'\n" +
+                "setsid sh ./daemon --force </dev/null >/dev/null 2>&1 &\n" +
                 "i=0\n" +
-                "until '" + lspctl + "' status >/dev/null 2>&1; do\n" +
+                "streak=0\n" +
+                "while [ $i -lt 100 ]; do\n" +
                 "  i=$((i+1))\n" +
-                "  if [ $i -ge 60 ]; then break; fi\n" +
                 "  sleep 1\n" +
-                "done\n";
+                "  if pidof lspd >/dev/null 2>&1 && '" + lspctl + "' status >/dev/null 2>&1; then\n" +
+                "    streak=$((streak+1))\n" +
+                "    if [ $streak -ge 3 ]; then break; fi\n" +
+                "  else streak=0; fi\n" +
+                "done\n" +
+                "echo ROLLBACK_DONE\n";
         Result r = runRoot(script);
         Log.i(TAG, "stopWriteBackAndRestart: exit=" + r.exitCode + "\n" + r.output);
         return r.output.contains("RESTART_OK");
@@ -431,32 +514,56 @@ public final class RootScopeManager {
         return r.output.contains("ALIVE");
     }
 
-    /** 确保守护进程存活（App 启动时调用）：已存活什么都不做；已死则安全拉起并轮询确认。 */
+    /**
+     * 确保守护进程存活（App 启动时调用）。
+     * 串行锁保护：作用域写入的重启窗口 / 重启后冷却期内一律不拉起，避免多实例争抢 binder。
+     * 已存活什么都不做；确认已死且不在冷却期才安全拉起并轮询确认。
+     */
     public boolean ensureDaemon() {
-        if (isDaemonAlive()) { Log.i(TAG, "ensureDaemon: already alive"); return true; }
-        Log.w(TAG, "ensureDaemon: daemon dead, starting...");
-        FrameworkDetector.Info fw = FrameworkDetector.detect();
-        if (fw.flavor == FrameworkDetector.FLAVOR_NONE) {
-            Log.e(TAG, "ensureDaemon: framework not detected"); return false;
+        synchronized (STATE_LOCK) {
+            if (state == STATE_APPLYING) {
+                Log.i(TAG, "ensureDaemon: applying in progress, skip");
+                return true;
+            }
+            if (System.currentTimeMillis() - lastRestartMs < POST_RESTART_COOLDOWN_MS) {
+                Log.i(TAG, "ensureDaemon: post-restart cooldown, skip");
+                return true;
+            }
+            state = STATE_APPLYING;
         }
-        String daemon = fw.moduleDir + "daemon";
-        String lspctl = fw.moduleDir + "lspctl";
-        String script =
-                "set +e\n" +
-                "setsid sh '" + daemon + "' --force </dev/null >/dev/null 2>&1 &\n" +
-                "i=0\n" +
-                "until '" + lspctl + "' status >/dev/null 2>&1; do\n" +
-                "  i=$((i+1))\n" +
-                "  if [ $i -ge 60 ]; then break; fi\n" +
-                "  sleep 1\n" +
-                "done\n" +
-                "if pidof lspd >/dev/null 2>&1 && '" + lspctl + "' status >/dev/null 2>&1; then\n" +
-                "  echo DAEMON_UP\n" +
-                "else echo DAEMON_DOWN\nfi";
-        Result r = runRoot(script);
-        boolean up = r.output.contains("DAEMON_UP");
-        Log.i(TAG, "ensureDaemon: " + (up ? "started" : "FAILED") + " output=" + r.output);
-        return up;
+        try {
+            if (isDaemonAlive()) { Log.i(TAG, "ensureDaemon: already alive"); return true; }
+            Log.w(TAG, "ensureDaemon: daemon dead, starting...");
+            FrameworkDetector.Info fw = FrameworkDetector.detect();
+            if (fw.flavor == FrameworkDetector.FLAVOR_NONE) {
+                Log.e(TAG, "ensureDaemon: framework not detected"); return false;
+            }
+            String daemon = fw.moduleDir + "daemon";
+            String lspctl = fw.moduleDir + "lspctl";
+            String script =
+                    "set +e\n" +
+                    "cd '" + fw.moduleDir + "'\n" +
+                    "setsid sh ./daemon --force </dev/null >/dev/null 2>&1 &\n" +
+                    "i=0\n" +
+                    "streak=0\n" +
+                    "while [ $i -lt 100 ]; do\n" +
+                    "  i=$((i+1))\n" +
+                    "  sleep 1\n" +
+                    "  if pidof lspd >/dev/null 2>&1 && '" + lspctl + "' status >/dev/null 2>&1; then\n" +
+                    "    streak=$((streak+1))\n" +
+                    "    if [ $streak -ge 3 ]; then break; fi\n" +
+                    "  else streak=0; fi\n" +
+                    "done\n" +
+                    "if pidof lspd >/dev/null 2>&1 && '" + lspctl + "' status >/dev/null 2>&1; then\n" +
+                    "  echo DAEMON_UP\n" +
+                    "else echo DAEMON_DOWN\nfi";
+            Result r = runRoot(script);
+            boolean up = r.output.contains("DAEMON_UP");
+            Log.i(TAG, "ensureDaemon: " + (up ? "started" : "FAILED") + " output=" + r.output);
+            return up;
+        } finally {
+            setStateIdle();
+        }
     }
 
     /** 强制停止目标应用（root），下次打开即为注入后的全新进程。 */

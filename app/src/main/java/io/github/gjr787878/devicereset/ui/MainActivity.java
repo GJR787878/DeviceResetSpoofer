@@ -9,6 +9,7 @@ import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -88,6 +89,11 @@ public class MainActivity extends AppCompatActivity {
     private TextView homeHeaderTv; // 主页额头：已连接 XX（框架名 + 版本）
     private View homeHeaderDot;    // 主页额头状态圆点
     private volatile FrameworkDetector.Info fwInfo; // 精确检测到的框架信息
+    // 框架检测结果短缓存：重启窗口/root 繁忙导致本次 detect 失败时，5 分钟内沿用上一次结果，避免误报"未连接"
+    private volatile FrameworkDetector.Info fwInfoLastGood;
+    private volatile long fwInfoLastGoodMs = 0L;
+    private static final long FW_DETECT_CACHE_MS = 5 * 60 * 1000L;
+    private volatile boolean scopeRefreshPending = false; // 重启窗口中延迟刷新的去重标记
 
     // ===== 三语字符串 =====
     private String t(String zh, String en, String ru) {
@@ -113,17 +119,66 @@ public class MainActivity extends AppCompatActivity {
 
     /** 异步读取 LSPosed 作用域到缓存，用于主页显示「作用域✓/未授权」；
      *  同时 root 读 LSPosed 配置库真实状态（libxposed service 未连接时兜底显示真实注入状态） */
+    /**
+     * 作用域写入/守护进程重启窗口：所有状态读取全部避让，UI 只显示"正在应用"，
+     * 并在 5 秒后自动重试；避免在窗口内拷到半写库/误报未连接/重复拉起守护进程。
+     */
+    private void showApplyingState() {
+        runOnUiThread(() -> {
+            if (homeHeaderTv != null) {
+                homeHeaderTv.setText(t("正在应用，框架重启中…", "Applying, framework restarting…",
+                        "Применяется, перезапуск фреймворка…"));
+                homeHeaderTv.setTextColor(COLOR_GRAY);
+            }
+            if (homeHeaderDot != null) homeHeaderDot.setBackgroundColor(COLOR_GRAY);
+            if (lspStatusTv != null) {
+                lspStatusTv.setText(t("框架：正在应用作用域，守护进程重启中（约 10-30 秒，期间管理器可能打不开）",
+                        "Framework: applying scope, daemon restarting (10-30s, manager may be unavailable meanwhile)",
+                        "Фреймворк: применение области, демон перезапускается (10-30с, менеджер может быть недоступен)"));
+                lspStatusTv.setTextColor(COLOR_GRAY);
+            }
+        });
+    }
+
+    private void scheduleScopeRefresh() {
+        if (scopeRefreshPending) return;
+        scopeRefreshPending = true;
+        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+            scopeRefreshPending = false;
+            if (!isFinishing() && !isDestroyed()) refreshScopeStatus();
+        }, 5000);
+    }
+
     private void refreshScopeStatus() {
+        // 作用域写入/守护进程重启窗口：不读库、不 detect、不拉起，直接避让并延迟重试
+        if (RootScopeManager.isApplying()) {
+            showApplyingState();
+            scheduleScopeRefresh();
+            return;
+        }
         new Thread(() -> {
             // 1) 首选 root：精确检测框架分支 + 直读作用域库（权威），用于"勾上即生效、零点击"
             boolean root = rootScope.isRootAvailable();
             FrameworkDetector.Info fw = null;
             if (root) {
                 fw = FrameworkDetector.detect(); // 精确检测分支/版本
-                fwInfo = fw;
-                rootScope.ensureDaemon(); // 启动时确保守护进程存活（已死则安全启动）
+                if (fw != null && fw.flavor != FrameworkDetector.FLAVOR_NONE) {
+                    fwInfo = fw;
+                    fwInfoLastGood = fw;
+                    fwInfoLastGoodMs = System.currentTimeMillis();
+                    rootScope.ensureDaemon(); // 启动时确保守护进程存活（已死则安全启动；重启冷却期内自动跳过）
+                } else if (fwInfoLastGood != null
+                        && System.currentTimeMillis() - fwInfoLastGoodMs < FW_DETECT_CACHE_MS) {
+                    // 检测临时失败（重启窗口/Magisk su 繁忙）：短时间内沿用上次结果，不误报"未连接"
+                    Log.w("MainActivity", "detect failed transiently, reuse last good framework info");
+                    fw = fwInfoLastGood;
+                    fwInfo = fw;
+                } else {
+                    fwInfo = fw;
+                }
             }
             final FrameworkDetector.Info fwFinal = fw;
+            boolean wasRootMode = rootMode;
             java.util.Set<String> rootScopeSet = root ? rootScope.readScope() : null;
             if (rootScopeSet != null) {
                 rootMode = true;
@@ -133,6 +188,16 @@ public class MainActivity extends AppCompatActivity {
                     scopeDbTargets.clear();
                     scopeDbTargets.addAll(rootScopeSet);
                 }
+                // 框架健康且空闲：补写之前排队的期望作用域（最终一致）
+                applyPendingScopeIfNeeded(rootScopeSet);
+            } else if (wasRootMode && fwFinal != null
+                    && fwFinal.flavor != FrameworkDetector.FLAVOR_NONE) {
+                // 之前已是 root 模式且框架仍在：本次读库失败（重启/半写窗口），保留旧状态，
+                // 不翻成"未连接"，稍后自动重试
+                Log.w("MainActivity", "readScope failed transiently, keep last scope state");
+                showApplyingState();
+                scheduleScopeRefresh();
+                return;
             } else {
                 rootMode = false;
             }
@@ -194,6 +259,49 @@ public class MainActivity extends AppCompatActivity {
                 }
             });
         }).start();
+    }
+
+    /**
+     * 框架恢复健康后，补写之前因重启窗口/繁忙而排队的期望作用域（最终一致）。
+     * 活库内容（去掉 system）已经等于期望集合时直接清待办，无需重启。
+     * 仅在 rootMode 且无进行中的框架操作时调用。
+     */
+    private void applyPendingScopeIfNeeded(java.util.Set<String> liveScope) {
+        try {
+            java.util.Set<String> pending = Config.getPendingTargets(this);
+            if (pending == null || RootScopeManager.isApplying()) return;
+            java.util.Set<String> liveRegular = new java.util.HashSet<>(liveScope);
+            liveRegular.remove("system");
+            liveRegular.remove(getPackageName());
+            if (liveRegular.equals(pending)) {
+                // 活库已经是期望状态（可能上次其实已写入）：清待办，对齐本地配置即可
+                Config.setPendingTargets(this, null);
+                Config.setTargetPackages(this, pending);
+                return;
+            }
+            Log.i("MainActivity", "retry pending scope: " + pending.size() + " targets");
+            boolean ok = rootScope.syncScope(pending);
+            if (ok) {
+                Config.setTargetPackages(this, pending);
+                Config.setPendingTargets(this, null);
+                // 同步 scopeDbTargets，保证本帧状态计数正确
+                synchronized (scopeDbTargets) {
+                    scopeDbTargets.clear();
+                    scopeDbTargets.add("system");
+                    scopeDbTargets.addAll(pending);
+                }
+                runOnUiThread(() -> {
+                    refreshAppList();
+                    Toast.makeText(this, t("作用域已补同步完成", "Scope sync completed",
+                            "Область успешно синхронизирована"), Toast.LENGTH_SHORT).show();
+                });
+            } else {
+                // 仍繁忙/失败：保留待办，下次恢复再试
+                Config.setPendingTargets(this, pending);
+            }
+        } catch (Throwable t) {
+            Log.w("MainActivity", "applyPendingScopeIfNeeded failed", t);
+        }
     }
 
     /**
@@ -523,18 +631,29 @@ public class MainActivity extends AppCompatActivity {
                                 "\"? It will be deselected and its identity & sentinel files deleted (the app itself is not uninstalled).",
                                 "»? Приложение будет убрано из целей, идентичность и сторожевые файлы удалены (само приложение не удаляется)."),
                     t("删除", "Remove", "Удалить"), true, () -> {
+                        // 本地：删除目标 + 身份 + 哨兵
                         Config.removeTargetPackage(this, pkg);
                         Config.removeIdentity(this, pkg);
                         deleteIdentityFiles(pkg);
                         if (LSPosedScopeHelper.isConnected()) {
+                            // 无 root 的 libxposed 路径
                             LSPosedScopeHelper.removeScope(pkg);
+                            refreshAppList();
+                            Toast.makeText(this,
+                                    t("已删除: ", "Removed: ", "Удалено: ") + name,
+                                    Toast.LENGTH_SHORT).show();
+                        } else if (rootMode && rootScope != null) {
+                            // 4.6.1 修复：root 直写模式下必须同步从框架作用域删除，否则库里仍残留，
+                            // 下次 onResume 又读回显示"已注入✓"（此前"删不掉"的根因）
+                            java.util.Set<String> desired = Config.getTargetPackages(this);
+                            submitScopeChangeFromRoot(desired, pkg, false, name, null);
                         } else {
                             // 3.9.2: 哨兵驱动，无需 root 写库
+                            refreshAppList();
+                            Toast.makeText(this,
+                                    t("已删除: ", "Removed: ", "Удалено: ") + name,
+                                    Toast.LENGTH_SHORT).show();
                         }
-                        refreshAppList();
-                        Toast.makeText(this,
-                                t("已删除: ", "Removed: ", "Удалено: ") + name,
-                                Toast.LENGTH_SHORT).show();
                     });
             return true;
         });
@@ -1262,6 +1381,90 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
+     * root 直写模式下统一的作用域变更通道（选择器点选 + 长按删除共用）。
+     * <p>
+     * 4.6.1 可靠性策略：
+     * 1) 全程进度框 + 忽略重复操作，写库由 {@link RootScopeManager} 静态锁串行化；
+     * 2) 首次失败时等待重启窗口过去后自动重试一次（此前"删除后回滚加回"的根源是窗口内重复写）；
+     * 3) 仍失败：把"期望集合"存为待办（框架恢复空闲后 {@link #applyPendingScopeIfNeeded}
+     *    自动补写），并按活库实际状态对齐本地配置，界面不再撒谎；
+     * 4) 成功：强停目标应用（下次打开即注入），清除待办并刷新列表。
+     *
+     * @param desired 期望的完整目标集合（不含 system）
+     * @param pkg     本次变更的应用
+     * @param adding  true=加入，false=移除
+     * @param appName 长按删除时传入展示名；选择器可传 null
+     * @param onUiDone 完成后在 UI 线程执行的附加刷新（选择器各行）；可为 null
+     */
+    private void submitScopeChangeFromRoot(final java.util.Set<String> desired, final String pkg,
+                                           final boolean adding, final String appName,
+                                           final Runnable onUiDone) {
+        if (pickerApplying) return;
+        pickerApplying = true;
+        final android.app.ProgressDialog pd = new android.app.ProgressDialog(this);
+        pd.setMessage(t("正在写入作用域并应用…（约 10-30 秒，期间管理器可能打不开）",
+                "Writing scope and applying… (10-30s, manager may be unavailable meanwhile)",
+                "Запись области и применение… (10-30с, менеджер может быть недоступен)"));
+        pd.setCancelable(false);
+        pd.show();
+        new Thread(() -> {
+            boolean ok = rootScope.syncScope(desired);
+            if (!ok) {
+                // 等待重启窗口/繁忙过去，重试一次
+                try { Thread.sleep(15000); } catch (InterruptedException ignored) {}
+                if (!RootScopeManager.isApplying()) {
+                    ok = rootScope.syncScope(desired);
+                }
+            }
+            if (ok) {
+                rootScope.forceStop(pkg); // 强制停止目标，下次打开即为注入后的进程
+                synchronized (scopeDbTargets) {
+                    scopeDbTargets.clear();
+                    scopeDbTargets.add("system");
+                    scopeDbTargets.addAll(desired);
+                }
+                Config.setPendingTargets(MainActivity.this, null);
+            } else {
+                // 仍失败：排队期望集合，等框架恢复后自动补写
+                Config.setPendingTargets(MainActivity.this, desired);
+                // 按活库真实状态对齐本地配置（读不到则回滚本次变更），避免界面与框架不一致
+                java.util.Set<String> live = rootScope.readScope();
+                if (live != null) {
+                    live.remove("system");
+                    live.remove(getPackageName());
+                    Config.setTargetPackages(MainActivity.this, live);
+                } else {
+                    if (adding) Config.removeTargetPackage(MainActivity.this, pkg);
+                    else Config.addTargetPackage(MainActivity.this, pkg);
+                }
+            }
+            final boolean fok = ok;
+            runOnUiThread(() -> {
+                pickerApplying = false;
+                try { pd.dismiss(); } catch (Throwable ignored) {}
+                if (onUiDone != null) onUiDone.run();
+                refreshAppList();
+                String msg;
+                if (fok) {
+                    if (adding) {
+                        msg = t("已注入✓，重新打开该应用即生效",
+                                "Injected✓; reopen the app to take effect",
+                                "Внедрено✓; перезапустите приложение");
+                    } else {
+                        String label = appName != null ? appName : pkg;
+                        msg = t("已删除: ", "Removed: ", "Удалено: ") + label;
+                    }
+                } else {
+                    msg = t("框架正繁忙，操作已排队，稍后自动完成（也可稍后重试）",
+                            "Framework busy; change queued and will complete automatically later (or retry later)",
+                            "Фреймворк занят; изменение поставлено в очередь и применится позже (или повторите)");
+                }
+                Toast.makeText(MainActivity.this, msg, Toast.LENGTH_LONG).show();
+            });
+        }).start();
+    }
+
+    /**
      * 选择器点选：直接切换作用域（不关闭弹窗，可连续勾选多个）。
      * - 当前未注入 → 加入目标并 requestScope：框架下发带「批准/拒绝」的通知，
      *   用户点「批准」后该应用才真正进入作用域（安全要求，无法静默）；
@@ -1283,46 +1486,10 @@ public class MainActivity extends AppCompatActivity {
             // 写入作用域 = 当前完整目标集（全量替换），保证与图一一致
             final java.util.Set<String> desired = new java.util.LinkedHashSet<>(
                     Config.getTargetPackages(this));
-            // 进度提示
-            final android.app.ProgressDialog pd = new android.app.ProgressDialog(this);
-            pd.setMessage(t("正在写入作用域并应用…",
-                    "Writing scope and applying…",
-                    "Запись области и применение…"));
-            pd.setCancelable(false);
-            pd.show();
-            pickerApplying = true;
             final boolean fAdding = adding;
-            new Thread(() -> {
-                boolean ok = rootScope.syncScope(desired);
-                if (ok) {
-                    rootScope.forceStop(pkg); // 强制停止目标，下次打开即为注入后的进程
-                    synchronized (scopeDbTargets) {
-                        scopeDbTargets.clear();
-                        scopeDbTargets.addAll(desired);
-                    }
-                } else {
-                    // 失败回滚本地目标列表
-                    if (fAdding) Config.removeTargetPackage(this, pkg);
-                    else Config.addTargetPackage(this, pkg);
-                }
-                final boolean fok = ok;
-                runOnUiThread(() -> {
-                    pickerApplying = false;
-                    try { pd.dismiss(); } catch (Throwable ignored) {}
-                    for (PickerRow r : allRows.values()) updatePickerRow(r);
-                    refreshAppList();
-                    Toast.makeText(MainActivity.this, fok
-                            ? (fAdding
-                                ? t("已注入✓，重新打开该应用即生效",
-                                    "Injected✓; reopen the app to take effect",
-                                    "Внедрено✓; перезапустите приложение")
-                                : t("已移除作用域: ", "Scope removed: ", "Убрано из области: ") + pkg)
-                            : t("作用域写入失败，请确认 root/框架正常",
-                                "Failed to write scope; check root/framework",
-                                "Не удалось записать область; проверьте root/фреймворк"),
-                            Toast.LENGTH_SHORT).show();
-                });
-            }).start();
+            submitScopeChangeFromRoot(desired, pkg, fAdding, null, () -> {
+                for (PickerRow r : allRows.values()) updatePickerRow(r);
+            });
             return;
         }
 
@@ -2073,7 +2240,15 @@ public class MainActivity extends AppCompatActivity {
                 devInfo.append("Build ID: ").append(android.os.Build.ID).append("\n");
                 devInfo.append("Android Version: ").append(android.os.Build.VERSION.RELEASE).append("\n");
                 devInfo.append("SDK Level: ").append(android.os.Build.VERSION.SDK_INT).append("\n");
-                devInfo.append("Module Version: 4.5.8 (versionCode 458)\n");
+                try {
+                    android.content.pm.PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0);
+                    devInfo.append("Module Version: ").append(pi.versionName)
+                            .append(" (versionCode ").append(
+                                    androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(pi))
+                            .append(")\n");
+                } catch (Exception e) {
+                    devInfo.append("Module Version: 4.6.1 (versionCode 461)\n");
+                }
                 devInfo.append("Language: ").append(currentLang).append("\n");
                 // Root 状态
                 devInfo.append("\n=== Root Status ===\n");
@@ -2383,9 +2558,9 @@ public class MainActivity extends AppCompatActivity {
     private void showAboutDialog() {
         new AlertDialog.Builder(this)
                 .setTitle("DeviceResetSpoofer")
-                .setMessage(t("版本：4.6.0\n\n自动识别官方 LSPosed 与 JingMatrix/Vector 双分支的设备伪装模块，主页额头显示「已连接 XX」。\n\n在「应用」页点「＋选择应用」点选目标：Vector 经 cli 即时生效、官方经直写库+重启守护进程几秒内生效，均无需点通知 → 打开详情「随机」或「自定义」→ 重新打开目标应用即生效；绿色「已注入✓」即已生效。\n支持中文 / English / Русский",
-                        "Version: 4.6.0\n\nDevice spoofing module that auto-detects both official LSPosed and JingMatrix/Vector; the home header shows \"Connected to XX\".\n\nOn the Apps tab tap \"+ Select App\": Vector applies instantly via cli, official via direct-write + daemon restart in a few seconds — no notification tap -> open its detail, Random / Customize -> reopen the app; a green \"Injected✓\" means it is active.\nSupports Chinese / English / Russian",
-                        "Версия: 4.6.0\n\nМодуль подмены устройства, автоматически определяющий официальный LSPosed и JingMatrix/Vector; в шапке главной страницы отображается «Подключено к XX».\n\nНа вкладке «Приложения» нажмите «+ Выбрать приложение»: Vector применяется мгновенно через cli, официальный — через прямую запись и перезапуск демона за несколько секунд, без нажатия на уведомление -> откройте детали, «Случайно»/«Настроить» -> перезапустите приложение; зелёное «Внедрено✓» означает, что модуль активен.\nПоддерживает 中文 / English / Русский"))
+                .setMessage(t("版本：4.6.1\n\n自动识别官方 LSPosed 与 JingMatrix/Vector 双分支的设备伪装模块，主页额头显示「已连接 XX」。\n\n在「应用」页点「＋选择应用」点选目标：Vector 经 cli 即时生效、官方经优雅停机+直写库+重启守护进程几秒内生效（串行化、不重复拉起），均无需点通知 → 打开详情「随机」或「自定义」→ 重新打开目标应用即生效；绿色「已注入✓」即已生效。长按删除会同步移除框架作用域；框架繁忙时操作自动排队，恢复后补写。\n支持中文 / English / Русский",
+                        "Version: 4.6.1\n\nDevice spoofing module that auto-detects both official LSPosed and JingMatrix/Vector; the home header shows \"Connected to XX\".\n\nOn the Apps tab tap \"+ Select App\": Vector applies instantly via cli, official via graceful stop + direct-write + daemon restart in a few seconds (serialized, no duplicate spawns) — no notification tap -> open its detail, Random / Customize -> reopen the app; a green \"Injected✓\" means it is active. Long-press remove also drops the framework scope; changes are queued and retried automatically when the framework is busy.\nSupports Chinese / English / Russian",
+                        "Версия: 4.6.1\n\nМодуль подмены устройства, автоматически определяющий официальный LSPosed и JingMatrix/Vector; в шапке главной страницы отображается «Подключено к XX».\n\nНа вкладке «Приложения» нажмите «+ Выбрать приложение»: Vector применяется мгновенно через cli, официальный — через корректную остановку, прямую запись и перезапуск демона за несколько секунд (серийно, без повторных запусков), без нажатия на уведомление -> откройте детали, «Случайно»/«Настроить» -> перезапустите приложение; зелёное «Внедрено✓» означает, что модуль активен. Долгое нажатие для удаления также убирает область фреймворка; при занятости фреймворка изменения ставятся в очередь и применяются автоматически.\nПоддерживает 中文 / English / Русский"))
                 .setPositiveButton(t("确定", "OK", "ОК"), null)
                 .show();
     }
