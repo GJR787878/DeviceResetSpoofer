@@ -91,7 +91,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: DeviceResetSpoofer-debug
+          name: DeviceResetSpooferX-debug
           path: app/build/outputs/apk/debug/*.apk
           retention-days: 30
 
@@ -99,15 +99,15 @@ jobs:
       - name: Package APK (tag only)
         if: startsWith(github.ref, 'refs/tags/')
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk ./DeviceResetSpoofer-${{ github.ref_name }}.apk
-          ls -la DeviceResetSpoofer-${{ github.ref_name }}.apk
+          cp app/build/outputs/apk/debug/app-debug.apk ./DeviceResetSpooferX-${{ github.ref_name }}.apk
+          ls -la DeviceResetSpooferX-${{ github.ref_name }}.apk
 
       - name: Create GitHub Release (tag only)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          name: DeviceResetSpoofer ${{ github.ref_name }}
+          name: DeviceResetSpooferX ${{ github.ref_name }}
           files: |
-            DeviceResetSpoofer-${{ github.ref_name }}.apk
+            DeviceResetSpooferX-${{ github.ref_name }}.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
