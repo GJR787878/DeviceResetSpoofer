@@ -108,6 +108,21 @@ public class IdentityGenerator {
         {"52001", "AIS", "th"},
     };
 
+    // 真实传感器型号池：{VENDOR, NAME, VERSION}
+    private static final String[][] SENSOR_PROFILES = {
+        {"Bosch", "LSM6DSL Accelerometer", "1"},
+        {"Bosch", "BMI260 Accelerometer", "1"},
+        {"Bosch", "BMM150 Magnetometer", "1"},
+        {"STMicroelectronics", "LIS2DH Accelerometer", "1"},
+        {"STMicroelectronics", "LSM6DSO Accelerometer", "1"},
+        {"STMicroelectronics", "LIS2MDL Magnetometer", "1"},
+        {"InvenSense", "ICM42688 Accelerometer", "1"},
+        {"InvenSense", "ICM20690 Accelerometer", "1"},
+        {"InvenSense", "MPU-6500 Accelerometer", "1"},
+        {"Google", "Goldfish Accelerometer", "1"},
+        {"AOSP", "Android Rotation Vector Sensor", "1"},
+    };
+
     public static Identity generateRandom() {
         Identity id = new Identity();
 
@@ -147,6 +162,9 @@ public class IdentityGenerator {
         // MAC地址
         id.macAddress = generateRandomMac();
 
+        // 蓝牙 MAC（独立生成，与 WiFi MAC 不同）
+        id.bluetoothMac = generateRandomMac();
+
         // 设备型号信息
         String[] profile = DEVICE_PROFILES[RANDOM.nextInt(DEVICE_PROFILES.length)];
         id.brand = profile[0];
@@ -166,10 +184,31 @@ public class IdentityGenerator {
         // Build ID
         id.buildId = "AP1A." + (202400000 + RANDOM.nextInt(100000)) + ".00" + RANDOM.nextInt(10);
 
+        // Build 扩展字段（与 release 正式版自洽）
+        id.buildTags = "release-keys";
+        id.buildType = "user";
+        id.buildUser = "android-build";
+        id.buildHost = "android-build";
+        // 真实设备 DISPLAY 通常等于 buildId，保持一致
+        id.buildDisplay = id.buildId;
+
         // Build时间（随机过去一年内的时间戳）
         long now = System.currentTimeMillis();
         long oneYear = 365L * 24 * 60 * 60 * 1000;
         id.buildTime = String.valueOf(now - Math.abs(RANDOM.nextLong()) % oneYear);
+
+        // Widevine DRM 设备唯一 ID：32 字节随机数，hex 存储（hook 时还原为 byte[]）
+        byte[] drmBytes = new byte[32];
+        RANDOM.nextBytes(drmBytes);
+        StringBuilder drmSb = new StringBuilder();
+        for (byte b : drmBytes) drmSb.append(String.format("%02x", b));
+        id.drmId = drmSb.toString();
+
+        // 传感器指纹：从真实传感器型号池随机选一套
+        String[] sensor = SENSOR_PROFILES[RANDOM.nextInt(SENSOR_PROFILES.length)];
+        id.sensorVendor = sensor[0];
+        id.sensorName = sensor[1];
+        id.sensorVersion = sensor[2];
 
         // 运营商信息
         String[] carrier = CARRIER_PROFILES[RANDOM.nextInt(CARRIER_PROFILES.length)];
@@ -289,6 +328,16 @@ public class IdentityGenerator {
         if (id.radioVersion == null) id.radioVersion = fresh.radioVersion;
         if (id.buildId == null) id.buildId = fresh.buildId;
         if (id.buildTime == null) id.buildTime = fresh.buildTime;
+        if (id.buildTags == null) id.buildTags = fresh.buildTags;
+        if (id.buildType == null) id.buildType = fresh.buildType;
+        if (id.buildUser == null) id.buildUser = fresh.buildUser;
+        if (id.buildHost == null) id.buildHost = fresh.buildHost;
+        if (id.buildDisplay == null) id.buildDisplay = fresh.buildDisplay;
+        if (id.drmId == null) id.drmId = fresh.drmId;
+        if (id.bluetoothMac == null) id.bluetoothMac = fresh.bluetoothMac;
+        if (id.sensorVendor == null) id.sensorVendor = fresh.sensorVendor;
+        if (id.sensorName == null) id.sensorName = fresh.sensorName;
+        if (id.sensorVersion == null) id.sensorVersion = fresh.sensorVersion;
         if (id.networkOperator == null) id.networkOperator = fresh.networkOperator;
         if (id.networkOperatorName == null) id.networkOperatorName = fresh.networkOperatorName;
         if (id.simOperator == null) id.simOperator = fresh.simOperator;

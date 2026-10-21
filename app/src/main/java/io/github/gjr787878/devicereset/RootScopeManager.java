@@ -332,11 +332,23 @@ public final class RootScopeManager {
                 return ok;
             }
 
-            // ---- 官方：直写库 + 优雅停机 + 重启守护进程 ----
-            Log.i(TAG, "syncScope via direct-write+restart (official LSPosed)");
+            // ---- 官方：优先经 adbd 本地执行 lspctl（免重启）----
+            // lspctl 写作用域要求调用进程祖先链含 adbd。本地起 adbd TCP 端口，
+            // 用内置 ADB 协议客户端（公钥已 root 写入 adb_keys，免授权弹窗）
+            // 经 adbd 执行 lspctl scope set，即时生效。
             Set<String> fullScope = new LinkedHashSet<>();
             fullScope.add("system"); // 系统框架只写 system（不写 android）
             if (targetPkgs != null) fullScope.addAll(targetPkgs);
+
+            boolean adbdOk = applyViaAdbd(fw, fullScope);
+            if (adbdOk) {
+                Log.i(TAG, "syncScope via adbd+lspctl (no reboot), scope=" + fullScope.size());
+                return true;
+            }
+            Log.w(TAG, "syncScope: adbd path failed, fallback to soft reboot");
+
+            // ---- 官方兜底：直写库 + 框架软重启 ----
+            Log.i(TAG, "syncScope via direct-write+soft reboot (official LSPosed)");
 
             if (!stageFromDevice(LIVE_DB)) return false;
 
@@ -455,6 +467,73 @@ public final class RootScopeManager {
         Result r = runRoot(script);
         Log.i(TAG, "applyViaCli: exit=" + r.exitCode + " output=" + r.output);
         return r.ok() && r.output.replaceAll("\\s+", "").contains("\"success\":true");
+    }
+
+    /**
+     * 经 adbd 本地执行 lspctl（免重启）。
+     *
+     * <p>步骤：① 生成 RSA keypair（进程内缓存）；② root 把公钥写入
+     * /data/misc/adb/adb_keys（免授权弹窗）；③ root 设置 adbd TCP 端口 5555 并启动；
+     * ④ {@link AdbClient} 连接，经 adbd 执行 {@code lspctl scope set}；
+     * ⑤ 检查输出无报错。</p>
+     */
+    private static java.security.KeyPair sAdbKey = null;
+
+    private boolean applyViaAdbd(FrameworkDetector.Info fw, Set<String> scope) {
+        try {
+            // 1) 生成 RSA keypair（缓存）
+            if (sAdbKey == null) {
+                java.security.KeyPairGenerator kpg =
+                        java.security.KeyPairGenerator.getInstance("RSA");
+                kpg.initialize(2048);
+                sAdbKey = kpg.generateKeyPair();
+            }
+            String pubLine = AdbClient.encodePublicKey(sAdbKey);
+
+            // 2) 写入公钥 + 3) 启动 adbd TCP
+            String setup =
+                    "mkdir -p /data/misc/adb\n" +
+                    "touch /data/misc/adb/adb_keys\n" +
+                    "grep -qF '" + pubLine + "' /data/misc/adb/adb_keys 2>/dev/null || "
+                            + "echo '" + pubLine + "' >> /data/misc/adb/adb_keys\n" +
+                    "chown system:shell /data/misc/adb /data/misc/adb/adb_keys 2>/dev/null\n" +
+                    "chmod 775 /data/misc/adb 2>/dev/null; chmod 660 /data/misc/adb/adb_keys 2>/dev/null\n" +
+                    "setprop service.adb.tcp.port 5555\n" +
+                    "getprop init.svc.adbd | grep -q running || start adbd\n" +
+                    "echo ADB_SETUP_DONE\n";
+            Result sr = runRoot(setup);
+            Log.i(TAG, "applyViaAdbd setup: " + sr.output);
+            if (!sr.output.contains("ADB_SETUP_DONE")) return false;
+
+            // 等待 adbd 监听端口
+            Thread.sleep(1500);
+
+            // 4) 构造 lspctl 命令（scope set 全量覆盖）
+            StringBuilder cmd = new StringBuilder();
+            cmd.append(fw.moduleDir).append("lspctl scope set '").append(MODULE_PKG).append("'");
+            for (String p : scope) {
+                if (p == null || p.isEmpty()) continue;
+                cmd.append(" '").append(p).append("/0'");
+            }
+            cmd.append(" 2>&1");
+
+            // 5) 经 adbd 执行
+            AdbClient client = new AdbClient("127.0.0.1", 5555, sAdbKey);
+            try {
+                client.connect();
+                String output = client.shell(cmd.toString());
+                Log.i(TAG, "applyViaAdbd lspctl output: " + output);
+                // lspctl 成功时无错误输出；失败包含 error/denied/拒绝
+                String low = output.toLowerCase();
+                return !low.contains("error") && !low.contains("denied")
+                        && !low.contains("refused") && !low.contains("unauthorized");
+            } finally {
+                client.close();
+            }
+        } catch (Throwable t) {
+            Log.e(TAG, "applyViaAdbd failed", t);
+            return false;
+        }
     }
 
     /**

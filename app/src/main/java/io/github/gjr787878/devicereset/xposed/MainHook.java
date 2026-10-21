@@ -4,10 +4,15 @@ import android.content.pm.ApplicationInfo;
 
 import io.github.gjr787878.devicereset.hooks.AdvertisingIdHook;
 import io.github.gjr787878.devicereset.hooks.AndroidIdHook;
+import io.github.gjr787878.devicereset.hooks.BluetoothMacHook;
 import io.github.gjr787878.devicereset.hooks.BuildInfoHook;
 import io.github.gjr787878.devicereset.hooks.GsfIdHook;
+import io.github.gjr787878.devicereset.hooks.MediaDrmHook;
+import io.github.gjr787878.devicereset.hooks.SensorHook;
+import io.github.gjr787878.devicereset.hooks.SettingsGlobalHook;
 import io.github.gjr787878.devicereset.hooks.TelephonyHook;
 import io.github.gjr787878.devicereset.hooks.WifiMacHook;
+import io.github.gjr787878.devicereset.hooks.NativePropertyHook;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XSharedPreferences;
@@ -67,6 +72,12 @@ public class MainHook implements IXposedHookLoadPackage {
         final boolean hookMac = getPrefBoolean("hook_mac", true);
         final boolean hookGsf = getPrefBoolean("hook_gsf_id", true);
         final boolean hookCarrier = getPrefBoolean("hook_carrier", true);
+        // 新增硬件级/补充 hook 开关
+        final boolean hookDrm = getPrefBoolean("hook_drm_id", true);
+        final boolean hookBtMac = getPrefBoolean("hook_bt_mac", true);
+        final boolean hookSensor = getPrefBoolean("hook_sensor", true);
+        final boolean hookSettings = getPrefBoolean("hook_settings", true);
+        final boolean hookNativeProp = getPrefBoolean("hook_native_prop", true);
 
         try {
             // 通过反射获取当前进程的dataDir
@@ -141,8 +152,34 @@ public class MainHook implements IXposedHookLoadPackage {
                 GsfIdHook.install(lpparam, identity);
                 XposedBridge.log("[DeviceReset] GsfId hook installed");
             }
+            // ---- 硬件级指纹 ----
+            if (hookDrm) {
+                MediaDrmHook.install(lpparam, identity);
+                XposedBridge.log("[DeviceReset] MediaDrm hook installed");
+            }
+            if (hookBtMac) {
+                BluetoothMacHook.install(lpparam, identity);
+                XposedBridge.log("[DeviceReset] BluetoothMac hook installed");
+            }
+            // ---- 补充覆盖 ----
+            if (hookSensor) {
+                SensorHook.install(lpparam, identity);
+                XposedBridge.log("[DeviceReset] Sensor hook installed");
+            }
+            if (hookSettings) {
+                SettingsGlobalHook.install(lpparam, identity);
+                XposedBridge.log("[DeviceReset] Settings hook installed");
+            }
+            // ---- Native 系统属性 PLT hook（Java 同步身份）----
+            if (hookNativeProp) {
+                NativePropertyHook.syncIdentity(identity);
+                XposedBridge.log("[DeviceReset] NativeProperty hook installed");
+            }
 
-            XposedBridge.log("[DeviceReset] ALL hooks installed successfully for " + lpparam.packageName);
+            XposedBridge.log("[DeviceReset] ALL hooks installed successfully for " + lpparam.packageName
+                    + " [drm=" + identity.drmId + ", btMac=" + identity.bluetoothMac
+                    + ", tags=" + identity.buildTags + ", type=" + identity.buildType
+                    + ", sensor=" + identity.sensorName + "]");
             writeHookLog(lpparam.packageName, "ALL hooks installed, identity source="
                     + (identityFromSentinel ? "sentinel" : "module-config"));
         } catch (Throwable t) {

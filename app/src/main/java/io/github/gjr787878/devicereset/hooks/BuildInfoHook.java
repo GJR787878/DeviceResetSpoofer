@@ -26,6 +26,18 @@ public class BuildInfoHook {
         setStaticFieldIfNotNull("BOOTLOADER", identity.bootloader);
         setStaticFieldIfNotNull("RADIO", identity.radioVersion);
         setStaticFieldIfNotNull("ID", identity.buildId);
+        // Build 扩展字段
+        setStaticFieldIfNotNull("TAGS", identity.buildTags);
+        setStaticFieldIfNotNull("TYPE", identity.buildType);
+        setStaticFieldIfNotNull("USER", identity.buildUser);
+        setStaticFieldIfNotNull("HOST", identity.buildHost);
+        // Build.VERSION.DISPLAY 位于内部类
+        try {
+            if (identity.buildDisplay != null) {
+                XposedHelpers.setStaticObjectField(Build.VERSION.class, "DISPLAY",
+                        identity.buildDisplay);
+            }
+        } catch (Throwable ignored) {}
 
         // Build.TIME 是 long 类型
         if (identity.buildTime != null) {

@@ -27,6 +27,21 @@ public class Identity {
     public String radioVersion;
     public String buildId;
     public String buildTime;
+    // Build 扩展字段
+    public String buildTags;
+    public String buildType;
+    public String buildUser;
+    public String buildHost;
+    public String buildDisplay;
+
+    // 硬件级指纹
+    public String drmId;        // Widevine DRM 设备唯一 ID
+    public String bluetoothMac; // 蓝牙 MAC
+
+    // 传感器指纹
+    public String sensorVendor;
+    public String sensorName;
+    public String sensorVersion;
 
     // 网络信息
     public String networkOperator;
@@ -64,6 +79,16 @@ public class Identity {
             json.put("radioVersion", radioVersion);
             json.put("buildId", buildId);
             json.put("buildTime", buildTime);
+            json.put("buildTags", buildTags);
+            json.put("buildType", buildType);
+            json.put("buildUser", buildUser);
+            json.put("buildHost", buildHost);
+            json.put("buildDisplay", buildDisplay);
+            json.put("drmId", drmId);
+            json.put("bluetoothMac", bluetoothMac);
+            json.put("sensorVendor", sensorVendor);
+            json.put("sensorName", sensorName);
+            json.put("sensorVersion", sensorVersion);
             json.put("networkOperator", networkOperator);
             json.put("networkOperatorName", networkOperatorName);
             json.put("simOperator", simOperator);
@@ -101,6 +126,16 @@ public class Identity {
             id.radioVersion = json.optString("radioVersion", null);
             id.buildId = json.optString("buildId", null);
             id.buildTime = json.optString("buildTime", null);
+            id.buildTags = json.optString("buildTags", null);
+            id.buildType = json.optString("buildType", null);
+            id.buildUser = json.optString("buildUser", null);
+            id.buildHost = json.optString("buildHost", null);
+            id.buildDisplay = json.optString("buildDisplay", null);
+            id.drmId = json.optString("drmId", null);
+            id.bluetoothMac = json.optString("bluetoothMac", null);
+            id.sensorVendor = json.optString("sensorVendor", null);
+            id.sensorName = json.optString("sensorName", null);
+            id.sensorVersion = json.optString("sensorVersion", null);
             id.networkOperator = json.optString("networkOperator", null);
             id.networkOperatorName = json.optString("networkOperatorName", null);
             id.simOperator = json.optString("simOperator", null);

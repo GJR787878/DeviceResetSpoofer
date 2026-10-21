@@ -959,10 +959,24 @@ public class MainActivity extends AppCompatActivity {
         addFieldRow(form, t("序列号", "Serial", "Серийный"), workingId[0].serial, d, val -> workingId[0].serial = val, true);
         addFieldRow(form, t("MAC地址", "MAC Address", "MAC-адрес"), workingId[0].macAddress, d, val -> workingId[0].macAddress = val, true);
 
+        addSectionLabel(form, t("硬件级指纹", "Hardware Fingerprints", "Аппаратные отпечатки"), d);
+        addFieldRow(form, t("DRM ID", "DRM ID", "DRM ID"), workingId[0].drmId, d, val -> workingId[0].drmId = val, true);
+        addFieldRow(form, t("蓝牙MAC", "Bluetooth MAC", "Bluetooth MAC"), workingId[0].bluetoothMac, d, val -> workingId[0].bluetoothMac = val, true);
+
         addSectionLabel(form, t("Build信息", "Build Info", "Build инфо"), d);
         addFieldRow(form, "Build ID", workingId[0].buildId, d, val -> workingId[0].buildId = val, true);
+        addFieldRow(form, t("显示版本", "Display", "Display"), workingId[0].buildDisplay, d, val -> workingId[0].buildDisplay = val, true);
+        addFieldRow(form, t("标签", "Tags", "Tags"), workingId[0].buildTags, d, val -> workingId[0].buildTags = val, false);
+        addFieldRow(form, t("类型", "Type", "Type"), workingId[0].buildType, d, val -> workingId[0].buildType = val, false);
+        addFieldRow(form, t("用户", "User", "User"), workingId[0].buildUser, d, val -> workingId[0].buildUser = val, false);
+        addFieldRow(form, t("主机", "Host", "Host"), workingId[0].buildHost, d, val -> workingId[0].buildHost = val, false);
         addFieldRow(form, "Bootloader", workingId[0].bootloader, d, val -> workingId[0].bootloader = val, true);
         addFieldRow(form, t("Radio版本", "Radio Version", "Версия Radio"), workingId[0].radioVersion, d, val -> workingId[0].radioVersion = val, true);
+
+        addSectionLabel(form, t("传感器", "Sensor", "Датчик"), d);
+        addFieldRow(form, t("传感器厂商", "Sensor Vendor", "Производитель"), workingId[0].sensorVendor, d, val -> workingId[0].sensorVendor = val, false);
+        addFieldRow(form, t("传感器名称", "Sensor Name", "Название"), workingId[0].sensorName, d, val -> workingId[0].sensorName = val, false);
+        addFieldRow(form, t("传感器版本", "Sensor Version", "Версия"), workingId[0].sensorVersion, d, val -> workingId[0].sensorVersion = val, false);
 
         addSectionLabel(form, t("SIM信息", "SIM Info", "SIM инфо"), d);
         addFieldRow(form, "IMSI", workingId[0].imsi, d, val -> workingId[0].imsi = val, true);
@@ -1044,10 +1058,30 @@ public class MainActivity extends AppCompatActivity {
                 else if ("IMEI".equals(label)) newVal = tmp.imei;
                 else if ("MEID".equals(label)) newVal = tmp.meid;
                 else if (label.contains("Serial") || label.contains("序列")) newVal = tmp.serial;
-                else if (label.contains("MAC")) newVal = tmp.macAddress;
+                else if (label.contains("MAC") && !label.contains("Bluetooth") && !label.contains("蓝牙"))
+                    newVal = tmp.macAddress;
+                else if (label.contains("Bluetooth") || label.contains("蓝牙"))
+                    newVal = tmp.bluetoothMac;
+                else if (label.contains("DRM")) newVal = tmp.drmId;
                 else if ("Build ID".equals(label)) newVal = tmp.buildId;
+                else if (label.contains("Display") || label.contains("显示"))
+                    newVal = tmp.buildDisplay;
+                else if (label.contains("Tags") || label.contains("标签"))
+                    newVal = tmp.buildTags;
+                else if (label.contains("Type") || label.contains("类型"))
+                    newVal = tmp.buildType;
+                else if (label.contains("User") || label.contains("用户"))
+                    newVal = tmp.buildUser;
+                else if (label.contains("Host") || label.contains("主机"))
+                    newVal = tmp.buildHost;
                 else if ("Bootloader".equals(label)) newVal = tmp.bootloader;
                 else if (label.contains("Radio")) newVal = tmp.radioVersion;
+                else if (label.contains("Sensor Vendor") || label.contains("传感器厂商"))
+                    newVal = tmp.sensorVendor;
+                else if (label.contains("Sensor Name") || label.contains("传感器名称"))
+                    newVal = tmp.sensorName;
+                else if (label.contains("Sensor Version") || label.contains("传感器版本"))
+                    newVal = tmp.sensorVersion;
                 else if ("IMSI".equals(label)) newVal = tmp.imsi;
                 else if ("ICCID".equals(label)) newVal = tmp.iccid;
                 // 修复：不再默认填 "?" —— 匹配不到则保持原值
@@ -1840,12 +1874,33 @@ public class MainActivity extends AppCompatActivity {
                 os2.flush();
                 su2.waitFor();
             }
-            // 4. 恢复身份哨兵（内部+外部），清数据后模块依然按哨兵身份生效
+            // 4. 清理 /sdcard 残留：pm clear 只清内部数据，外部存储残留不动。
+            //    清理 Android/data、Android/media、Android/obb 下的包名目录，
+            //    以及 /sdcard 根目录下与包名相关的隐藏文件（应用自行创建的残留）。
+            //    外部哨兵目录会一起删掉，稍后随恢复步骤重建。
+            try {
+                Process su3 = Runtime.getRuntime().exec("su");
+                java.io.DataOutputStream os3 = new java.io.DataOutputStream(su3.getOutputStream());
+                os3.writeBytes("S=/sdcard\n");
+                os3.writeBytes("rm -rf \"$S/Android/data/" + pkg + "\" 2>/dev/null\n");
+                os3.writeBytes("rm -rf \"$S/Android/media/" + pkg + "\" 2>/dev/null\n");
+                os3.writeBytes("rm -rf \"$S/Android/obb/" + pkg + "\" 2>/dev/null\n");
+                // 根目录下与包名相关的隐藏文件/目录（如 .<pkg>、.<pkg>_xxx）
+                os3.writeBytes("for f in \"$S\"/.*; do [ -e \"$f\" ] || continue; "
+                        + "b=$(basename \"$f\"); case \"$b\" in ." + pkg
+                        + "*|.\"" + pkg + "\"*) rm -rf \"$f\" 2>/dev/null;; esac; done\n");
+                os3.writeBytes("exit\n");
+                os3.flush();
+                os3.close();
+                su3.waitFor();
+            } catch (Throwable ignored) {}
+
+            // 5. 恢复身份哨兵（内部+外部），清数据后模块依然按哨兵身份生效
             if (backup != null && backup.startsWith("{")) {
                 writeIdentityFile(pkg, backup);
                 writeExternalIdentityFile(pkg, backup);
             }
-            // 5. 不自动打开目标应用：保持停止状态（pm clear 已强停），用户下次手动打开时生效
+            // 6. 不自动打开目标应用：保持停止状态（pm clear 已强停），用户下次手动打开时生效
             return true;
         } catch (Throwable t) {
             return false;

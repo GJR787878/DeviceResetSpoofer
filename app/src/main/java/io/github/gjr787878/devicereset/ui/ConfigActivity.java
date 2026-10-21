@@ -424,6 +424,8 @@ public class ConfigActivity extends AppCompatActivity {
         if (id.serial != null) sb.append(isZh ? "序列号: " : "Serial: ").append(id.serial).append("\n");
         if (id.macAddress != null) sb.append(isZh ? "MAC地址: " : "MAC: ").append(id.macAddress).append("\n");
         if (id.gsfId != null) sb.append(isZh ? "GSF ID: " : "GSF ID: ").append(id.gsfId).append("\n");
+        if (id.drmId != null) sb.append(isZh ? "DRM ID: " : "DRM ID: ").append(id.drmId).append("\n");
+        if (id.bluetoothMac != null) sb.append(isZh ? "蓝牙MAC: " : "Bluetooth MAC: ").append(id.bluetoothMac).append("\n");
 
         sb.append("\n");
         if (id.brand != null) sb.append(isZh ? "品牌: " : "Brand: ").append(id.brand).append("\n");
@@ -434,7 +436,11 @@ public class ConfigActivity extends AppCompatActivity {
         if (id.hardware != null) sb.append(isZh ? "硬件: " : "Hardware: ").append(id.hardware).append("\n");
         if (id.fingerprint != null) sb.append(isZh ? "指纹: " : "Fingerprint: ").append(id.fingerprint).append("\n");
         if (id.buildId != null) sb.append(isZh ? "Build ID: " : "Build ID: ").append(id.buildId).append("\n");
+        if (id.buildDisplay != null) sb.append(isZh ? "显示版本: " : "Display: ").append(id.buildDisplay).append("\n");
+        if (id.buildTags != null) sb.append(isZh ? "标签: " : "Tags: ").append(id.buildTags).append("\n");
+        if (id.buildType != null) sb.append(isZh ? "类型: " : "Type: ").append(id.buildType).append("\n");
         if (id.bootloader != null) sb.append(isZh ? "Bootloader: " : "Bootloader: ").append(id.bootloader).append("\n");
+        if (id.sensorName != null) sb.append(isZh ? "传感器: " : "Sensor: ").append(id.sensorVendor).append(" / ").append(id.sensorName).append("\n");
 
         sb.append("\n");
         if (id.networkOperator != null) sb.append(isZh ? "网络运营商代码: " : "Network Op: ").append(id.networkOperator).append("\n");
