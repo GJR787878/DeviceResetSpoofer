@@ -15,8 +15,8 @@ android {
         applicationId "io.github.gjr787878.devicereset"
         minSdk 26
         targetSdk 34
-        versionCode 474
-        versionName "4.7.4"
+        versionCode 475
+        versionName "4.7.5"
 
         externalNativeBuild {
             cmake {

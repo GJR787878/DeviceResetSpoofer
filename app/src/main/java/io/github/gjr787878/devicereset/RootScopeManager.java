@@ -493,6 +493,15 @@ public final class RootScopeManager {
             }
             String pubLine = AdbClient.encodePublicKey(sAdbKey);
 
+            // 复制 b64 诊断程序（用设备 bionic 的 b64_pton 实测，与 adbd 同源）
+            File testBin = new File(context.getFilesDir(), "test_b64_arm64");
+            try (java.io.InputStream is = context.getAssets().open("test_b64_arm64");
+                 java.io.FileOutputStream fos = new java.io.FileOutputStream(testBin)) {
+                byte[] buf = new byte[8192]; int r;
+                while ((r = is.read(buf)) > 0) fos.write(buf, 0, r);
+            }
+            String b64Only = pubLine.substring(0, pubLine.indexOf(' '));
+
             // 2) 自动开启 USB 调试（root 直写全局设置，免手动）+ 写公钥 + 重启 adbd
             //    先清掉历史上写入的旧格式 key（X.509 SPKI 会导致 adbd "Invalid base64 key"），
             //    只保留其他来源（如电脑授权）的 key，再写本次 PKCS#1 公钥。
@@ -508,6 +517,22 @@ public final class RootScopeManager {
                             + "echo '" + pubLine + "' >> /data/misc/adb/adb_keys\n" +
                     "chown system:shell /data/misc/adb /data/misc/adb/adb_keys 2>/dev/null\n" +
                     "chmod 775 /data/misc/adb 2>/dev/null; chmod 660 /data/misc/adb/adb_keys 2>/dev/null\n" +
+                    "echo === KEYS DIAG START ===\n" +
+                    "ls -la /apex/com.android.adbd/bin/adbd /system/bin/adbd 2>/dev/null\n" +
+                    "wc -l /data/misc/adb/adb_keys\n" +
+                    "ls -laZ /data/misc/adb/adb_keys\n" +
+                    "sed 's/ .*//' /data/misc/adb/adb_keys | while read k; do echo \"len=${#k} decode=$(echo -n \"$k\" | base64 -d 2>/dev/null | wc -c)\"; done\n" +
+                    "hexdump -C /data/misc/adb/adb_keys | head -2\n" +
+                    "hexdump -C /data/misc/adb/adb_keys | tail -2\n" +
+                    "echo === B64 NATIVE TEST ===\n" +
+                    "cp '" + testBin.getAbsolutePath() + "' /data/local/tmp/test_b64 2>/dev/null\n" +
+                    "chmod 755 /data/local/tmp/test_b64\n" +
+                    "/data/local/tmp/test_b64 '" + b64Only + "'\n" +
+                    "echo === ADB BIN ===\n" +
+                    "ADBBIN=$(ls /apex/com.android.adbd/bin/adbd 2>/dev/null || echo /system/bin/adbd)\n" +
+                    "echo adbd=$ADBBIN\n" +
+                    "strings \"$ADBBIN\" | grep -iE \"adb_keys|pubkey|/data/misc/adb\" | head -10\n" +
+                    "echo === KEYS DIAG END ===\n" +
                     "stop adbd 2>/dev/null; sleep 1; start adbd\n" +
                     "echo ADB_SETUP_DONE\n";
             Result sr = runRoot(setup);

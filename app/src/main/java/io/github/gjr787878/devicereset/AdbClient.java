@@ -65,13 +65,17 @@ public class AdbClient {
         // 发送 CNXN
         send(A_CNXN, A_VERSION, MAX_PAYLOAD, "host::\0".getBytes(StandardCharsets.UTF_8));
 
-        // 等待 CNXN 或 AUTH
+        // 等待 CNXN 或 AUTH（签名验证失败时 adbd 会重发 token，最多重试 3 次）
+        int authRetries = 0;
         while (true) {
             Message msg = readMessage();
             if (msg.command == A_CNXN) {
                 return; // 已认证（key 已在 adb_keys）
             } else if (msg.command == A_AUTH) {
                 if (msg.arg0 == AUTH_TOKEN) {
+                    if (++authRetries > 3) {
+                        throw new IOException("AUTH 签名验证失败超过 3 次（公钥未被 adbd 接受）");
+                    }
                     // 用私钥对 token 做 SHA1withRSA 签名
                     Signature sig = Signature.getInstance("SHA1withRSA");
                     sig.initSign(keyPair.getPrivate());
