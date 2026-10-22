@@ -472,9 +472,10 @@ public final class RootScopeManager {
     /**
      * 经 adbd 本地执行 lspctl（免重启）。
      *
-     * <p>步骤：① 生成 RSA keypair（进程内缓存）；② root 把公钥写入
-     * /data/misc/adb/adb_keys（免授权弹窗）；③ root 设置 adbd TCP 端口 5555 并启动；
-     * ④ {@link AdbClient} 连接，经 adbd 执行 {@code lspctl scope set}；
+     * <p>步骤：① 生成 RSA keypair（进程内缓存）；② root 自动开启 USB 调试
+     * （settings put global adb_enabled 1，免手动开开发者选项）并把公钥写入
+     * /data/misc/adb/adb_keys（免授权弹窗）；③ root 设置 adbd TCP 端口 5555
+     * 并重启 adbd；④ {@link AdbClient} 连接，经 adbd 执行 {@code lspctl scope set}；
      * ⑤ 检查输出无报错。</p>
      */
     private static java.security.KeyPair sAdbKey = null;
@@ -490,23 +491,25 @@ public final class RootScopeManager {
             }
             String pubLine = AdbClient.encodePublicKey(sAdbKey);
 
-            // 2) 写入公钥 + 3) 启动 adbd TCP
+            // 2) 自动开启 USB 调试（root 直写全局设置，免手动）+ 写公钥 + 重启 adbd
             String setup =
+                    "settings put global adb_enabled 1\n" +
+                    "setprop persist.adb.enabled 1\n" +
+                    "setprop service.adb.tcp.port 5555\n" +
                     "mkdir -p /data/misc/adb\n" +
                     "touch /data/misc/adb/adb_keys\n" +
                     "grep -qF '" + pubLine + "' /data/misc/adb/adb_keys 2>/dev/null || "
                             + "echo '" + pubLine + "' >> /data/misc/adb/adb_keys\n" +
                     "chown system:shell /data/misc/adb /data/misc/adb/adb_keys 2>/dev/null\n" +
                     "chmod 775 /data/misc/adb 2>/dev/null; chmod 660 /data/misc/adb/adb_keys 2>/dev/null\n" +
-                    "setprop service.adb.tcp.port 5555\n" +
-                    "getprop init.svc.adbd | grep -q running || start adbd\n" +
+                    "stop adbd 2>/dev/null; sleep 1; start adbd\n" +
                     "echo ADB_SETUP_DONE\n";
             Result sr = runRoot(setup);
             Log.i(TAG, "applyViaAdbd setup: " + sr.output);
             if (!sr.output.contains("ADB_SETUP_DONE")) return false;
 
-            // 等待 adbd 监听端口
-            Thread.sleep(1500);
+            // 等待 adbd 监听端口（重启后稍等）
+            Thread.sleep(2500);
 
             // 4) 构造 lspctl 命令（scope set 全量覆盖）
             StringBuilder cmd = new StringBuilder();
