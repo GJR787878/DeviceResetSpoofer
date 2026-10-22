@@ -1,8 +1,10 @@
 package io.github.gjr787878.devicereset;
 
+import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.math.BigInteger;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.ByteBuffer;
@@ -10,6 +12,7 @@ import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.security.Signature;
+import java.security.interfaces.RSAPublicKey;
 import java.util.Base64;
 
 /**
@@ -52,13 +55,13 @@ public class AdbClient {
         this.keyPair = keyPair;
     }
 
-    /** 连接并完成握手/认证。 */
+    /** 连接并完成握手/认证。失败快速返回（AUTH 全程 ≤ ~8s），避免 UI 长时间转圈。 */
     public void connect() throws Exception {
         socket = new Socket();
         socket.setTcpNoDelay(true);
-        socket.connect(new InetSocketAddress(host, port), 5000);
+        socket.connect(new InetSocketAddress(host, port), 3000);
         in = new DataInputStream(socket.getInputStream());
-        socket.setSoTimeout(10000);
+        socket.setSoTimeout(5000);
         out = new DataOutputStream(socket.getOutputStream());
 
         // 发送 CNXN
@@ -178,9 +181,47 @@ public class AdbClient {
         return sum;
     }
 
-    /** 编码 ADB 格式公钥（X.509 SubjectPublicKeyInfo 的 base64）。 */
+    /**
+     * 编码 ADB 格式公钥（PKCS#1 RSAPublicKey DER 的 base64）。
+     *
+     * <p>重要：Android adbd 的 parse_key()（adb_auth.cpp）只接受两种格式——
+     * PKCS#8 私钥（d2i_PKCS8_PRIV_KEY_INFO）或 PKCS#1 公钥（d2i_RSAPublicKey）。
+     * <b>X.509 SubjectPublicKeyInfo（getPublic().getEncoded()）不被支持</b>，
+     * 会导致 adbd 报 "Invalid base64 key"、认证永远失败。
+     * 这里手工构造 PKCS#1 RSAPublicKey：SEQUENCE { INTEGER n, INTEGER e }。</p>
+     */
     public static String encodePublicKey(KeyPair kp) {
-        byte[] enc = kp.getPublic().getEncoded();
-        return Base64.getEncoder().encodeToString(enc) + " DeviceResetSpoofer";
+        RSAPublicKey pub = (RSAPublicKey) kp.getPublic();
+        byte[] der = encodePkcs1RsaPublicKey(pub.getModulus(), pub.getPublicExponent());
+        return Base64.getEncoder().encodeToString(der) + " DeviceResetSpoofer";
+    }
+
+    /** 构造 PKCS#1 RSAPublicKey DER：SEQUENCE { INTEGER n, INTEGER e } */
+    private static byte[] encodePkcs1RsaPublicKey(BigInteger n, BigInteger e) {
+        byte[] nDer = derEncode(0x02, n.toByteArray()); // INTEGER
+        byte[] eDer = derEncode(0x02, e.toByteArray()); // INTEGER
+        ByteArrayOutputStream seq = new ByteArrayOutputStream();
+        seq.write(nDer, 0, nDer.length);
+        seq.write(eDer, 0, eDer.length);
+        return derEncode(0x30, seq.toByteArray());      // SEQUENCE
+    }
+
+    /** 最小 DER 长度/TLV 编码（支持最长 65535 字节负载） */
+    private static byte[] derEncode(int tag, byte[] content) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(tag);
+        int len = content.length;
+        if (len < 0x80) {
+            out.write(len);
+        } else if (len <= 0xFF) {
+            out.write(0x81);
+            out.write(len);
+        } else {
+            out.write(0x82);
+            out.write((len >> 8) & 0xFF);
+            out.write(len & 0xFF);
+        }
+        out.write(content, 0, content.length);
+        return out.toByteArray();
     }
 }

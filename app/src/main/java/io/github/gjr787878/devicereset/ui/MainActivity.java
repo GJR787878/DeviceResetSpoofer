@@ -317,6 +317,7 @@ public class MainActivity extends AppCompatActivity {
                 synchronized (scopeDbTargets) {
                     scopeDbTargets.clear();
                     scopeDbTargets.add("system");
+                    scopeDbTargets.add(getPackageName());
                     scopeDbTargets.addAll(pending);
                 }
                 runOnUiThread(() -> {
@@ -1559,6 +1560,7 @@ public class MainActivity extends AppCompatActivity {
                 synchronized (scopeDbTargets) {
                     scopeDbTargets.clear();
                     scopeDbTargets.add("system");
+                    scopeDbTargets.add(getPackageName());
                     scopeDbTargets.addAll(desired);
                 }
                 Config.setPendingTargets(MainActivity.this, null);

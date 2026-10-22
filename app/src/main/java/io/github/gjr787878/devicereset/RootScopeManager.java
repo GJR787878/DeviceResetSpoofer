@@ -338,6 +338,8 @@ public final class RootScopeManager {
             // 经 adbd 执行 lspctl scope set，即时生效。
             Set<String> fullScope = new LinkedHashSet<>();
             fullScope.add("system"); // 系统框架只写 system（不写 android）
+            fullScope.add(MODULE_PKG); // 模块自身：使模块 UI 进程被框架注入，
+                                       // libxposed service 可连接（免重启兜底通道）
             if (targetPkgs != null) fullScope.addAll(targetPkgs);
 
             boolean adbdOk = applyViaAdbd(fw, fullScope);
@@ -492,12 +494,16 @@ public final class RootScopeManager {
             String pubLine = AdbClient.encodePublicKey(sAdbKey);
 
             // 2) 自动开启 USB 调试（root 直写全局设置，免手动）+ 写公钥 + 重启 adbd
+            //    先清掉历史上写入的旧格式 key（X.509 SPKI 会导致 adbd "Invalid base64 key"），
+            //    只保留其他来源（如电脑授权）的 key，再写本次 PKCS#1 公钥。
             String setup =
                     "settings put global adb_enabled 1\n" +
                     "setprop persist.adb.enabled 1\n" +
                     "setprop service.adb.tcp.port 5555\n" +
                     "mkdir -p /data/misc/adb\n" +
                     "touch /data/misc/adb/adb_keys\n" +
+                    "grep -v ' DeviceResetSpoofer$' /data/misc/adb/adb_keys > /data/misc/adb/adb_keys.clean 2>/dev/null; " +
+                    "mv /data/misc/adb/adb_keys.clean /data/misc/adb/adb_keys\n" +
                     "grep -qF '" + pubLine + "' /data/misc/adb/adb_keys 2>/dev/null || "
                             + "echo '" + pubLine + "' >> /data/misc/adb/adb_keys\n" +
                     "chown system:shell /data/misc/adb /data/misc/adb/adb_keys 2>/dev/null\n" +
