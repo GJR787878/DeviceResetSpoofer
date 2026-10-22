@@ -9,18 +9,18 @@ def keystorePass = System.getenv("DRS_KEYSTORE_PASS") ?: "DRS_Key_2026!"
 android {
     namespace "io.github.gjr787878.devicereset"
     compileSdk 36
-    ndkVersion "26.1.10909125"
+    ndkVersion "28.2.13676358"
 
     defaultConfig {
         applicationId "io.github.gjr787878.devicereset"
         minSdk 26
         targetSdk 34
-        versionCode 470
-        versionName "4.7.0"
+        versionCode 471
+        versionName "4.7.1"
 
         externalNativeBuild {
             cmake {
-                arguments "-DANDROID_STL=c++_shared"
+                arguments "-DANDROID_STL=c++_static"
             }
         }
         ndk {

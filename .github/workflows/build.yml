@@ -56,18 +56,28 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace
+      - name: Build Release APK
+        run: ./gradlew assembleRelease --stacktrace
 
-      - name: Verify APK signature
+      - name: Verify APK signature & 16KB alignment
         run: |
           apksigner="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner"
-          certs=$("$apksigner" verify --print-certs app/build/outputs/apk/debug/app-debug.apk)
+          certs=$("$apksigner" verify --print-certs app/build/outputs/apk/release/app-release.apk)
           echo "$certs"
           # 断言证书指纹与固定keystore一致(DRS_Key_2026!生成的证书)
           echo "$certs" | grep -q "d21cd192f0b2e4c0cd81b52db9b8b5e2fe62376fd87b13e374560f124ad7f843" \
             && echo "SIGNATURE OK: 与固定keystore指纹一致" \
             || { echo "SIGNATURE MISMATCH"; exit 1; }
+          # 16KB 页兼容：arm64 库 LOAD 段必须 0x4000 对齐
+          READELF="$ANDROID_HOME/ndk/$(ls "$ANDROID_HOME/ndk" | sort -V | tail -1)/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          mkdir -p /tmp/apk16 && unzip -o -q app/build/outputs/apk/release/app-release.apk "lib/arm64-v8a/*.so" -d /tmp/apk16
+          FAIL=0
+          for lib in /tmp/apk16/lib/arm64-v8a/*.so; do
+            ALIGN=$($READELF -l "$lib" | awk '/LOAD/{print $NF; exit}')
+            echo "$(basename "$lib"): LOAD对齐=$ALIGN"
+            [ "$ALIGN" = "0x4000" ] || FAIL=1
+          done
+          [ $FAIL -eq 0 ] && echo "16KB ALIGNMENT OK" || { echo "16KB ALIGNMENT FAIL"; exit 1; }
 
       # 仅在 main 分支运行时更新版本文件；分支/PR构建跳过，避免 push main 失败导致无产物
       - name: Update latest_version.txt (jsDelivr CDN 检测源)
@@ -91,15 +101,15 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: DeviceResetSpooferX-debug
-          path: app/build/outputs/apk/debug/*.apk
+          name: DeviceResetSpooferX-release
+          path: app/build/outputs/apk/release/*.apk
           retention-days: 30
 
       # ========= 仅当打 tag（v*）时：自动发布 Release =========
       - name: Package APK (tag only)
         if: startsWith(github.ref, 'refs/tags/')
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk ./DeviceResetSpooferX-${{ github.ref_name }}.apk
+          cp app/build/outputs/apk/release/app-release.apk ./DeviceResetSpooferX-${{ github.ref_name }}.apk
           ls -la DeviceResetSpooferX-${{ github.ref_name }}.apk
 
       - name: Create GitHub Release (tag only)
