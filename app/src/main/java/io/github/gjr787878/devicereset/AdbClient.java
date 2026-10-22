@@ -1,10 +1,8 @@
 package io.github.gjr787878.devicereset;
 
-import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
-import java.math.BigInteger;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.ByteBuffer;
@@ -182,46 +180,34 @@ public class AdbClient {
     }
 
     /**
-     * 编码 ADB 格式公钥（PKCS#1 RSAPublicKey DER 的 base64）。
+     * 编码 ADB 格式公钥（Android 自定义 android_pubkey_t 二进制结构的 base64）。
      *
-     * <p>重要：Android adbd 的 parse_key()（adb_auth.cpp）只接受两种格式——
-     * PKCS#8 私钥（d2i_PKCS8_PRIV_KEY_INFO）或 PKCS#1 公钥（d2i_RSAPublicKey）。
-     * <b>X.509 SubjectPublicKeyInfo（getPublic().getEncoded()）不被支持</b>，
-     * 会导致 adbd 报 "Invalid base64 key"、认证永远失败。
-     * 这里手工构造 PKCS#1 RSAPublicKey：SEQUENCE { INTEGER n, INTEGER e }。</p>
+     * <p>重要：Android adbd 的 adbd_auth.cpp 用 b64_pton 解码后要求字节数
+     * <b>精确等于 ANDROID_PUBKEY_ENCODED_SIZE (284 字节)</b>，否则报
+     * "Invalid base64 key"。标准 X.509 SPKI（294B）和 PKCS#1 DER（269B）都不满足。
+     * 结构（小端，ARM 主机字节序）：
+     *   uint32 type=0; uint32 key_size=2048; uint32 modulus_size=256;
+     *   uint8  modulus[256];   // n 右对齐（前补零）
+     *   uint32 exponent=65537; uint32 reserved1/2/3=0;</p>
      */
     public static String encodePublicKey(KeyPair kp) {
         RSAPublicKey pub = (RSAPublicKey) kp.getPublic();
-        byte[] der = encodePkcs1RsaPublicKey(pub.getModulus(), pub.getPublicExponent());
-        return Base64.getEncoder().encodeToString(der) + " DeviceResetSpoofer";
-    }
+        byte[] nRaw = pub.getModulus().toByteArray();
+        // 去掉 BigInteger 前导 0
+        int off = 0;
+        while (off < nRaw.length - 1 && nRaw[off] == 0) off++;
+        int nLen = nRaw.length - off;
+        if (nLen > 256) throw new RuntimeException("RSA modulus > 256 bytes");
 
-    /** 构造 PKCS#1 RSAPublicKey DER：SEQUENCE { INTEGER n, INTEGER e } */
-    private static byte[] encodePkcs1RsaPublicKey(BigInteger n, BigInteger e) {
-        byte[] nDer = derEncode(0x02, n.toByteArray()); // INTEGER
-        byte[] eDer = derEncode(0x02, e.toByteArray()); // INTEGER
-        ByteArrayOutputStream seq = new ByteArrayOutputStream();
-        seq.write(nDer, 0, nDer.length);
-        seq.write(eDer, 0, eDer.length);
-        return derEncode(0x30, seq.toByteArray());      // SEQUENCE
-    }
-
-    /** 最小 DER 长度/TLV 编码（支持最长 65535 字节负载） */
-    private static byte[] derEncode(int tag, byte[] content) {
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        out.write(tag);
-        int len = content.length;
-        if (len < 0x80) {
-            out.write(len);
-        } else if (len <= 0xFF) {
-            out.write(0x81);
-            out.write(len);
-        } else {
-            out.write(0x82);
-            out.write((len >> 8) & 0xFF);
-            out.write(len & 0xFF);
-        }
-        out.write(content, 0, content.length);
-        return out.toByteArray();
+        ByteBuffer buf = ByteBuffer.allocate(284).order(ByteOrder.LITTLE_ENDIAN);
+        buf.putInt(0);                              // type = ADB_RSA_PUB_KEY
+        buf.putInt(2048);                           // key_size (bits)
+        buf.putInt(nLen);                           // modulus_size (bytes)
+        byte[] modulus = new byte[256];             // 右对齐：前补零
+        System.arraycopy(nRaw, off, modulus, 256 - nLen, nLen);
+        buf.put(modulus);
+        buf.putInt(pub.getPublicExponent().intValue()); // exponent
+        buf.putInt(0); buf.putInt(0); buf.putInt(0);    // reserved
+        return Base64.getEncoder().encodeToString(buf.array()) + " DeviceResetSpoofer";
     }
 }
