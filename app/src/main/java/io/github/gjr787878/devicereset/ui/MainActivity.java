@@ -384,9 +384,11 @@ public class MainActivity extends AppCompatActivity {
 
     private void setHeaderDot(int color) {
         if (homeHeaderDot == null) return;
-        android.graphics.drawable.GradientDrawable g =
-                (android.graphics.drawable.GradientDrawable) homeHeaderDot.getBackground();
-        if (g != null) g.setColor(color);
+        android.graphics.drawable.GradientDrawable dot =
+                new android.graphics.drawable.GradientDrawable();
+        dot.setShape(android.graphics.drawable.GradientDrawable.OVAL);
+        dot.setColor(color);
+        homeHeaderDot.setBackground(dot);
     }
 
     @Override

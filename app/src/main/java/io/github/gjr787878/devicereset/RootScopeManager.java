@@ -325,7 +325,11 @@ public final class RootScopeManager {
             }
 
             // ---- Vector：cli 直写（守护进程内部处理，零重启）----
-            if (fw.cliWritesUsable()) {
+            if (fw.isVector()) {
+                if (!fw.cliWritesUsable()) {
+                    Log.e(TAG, "syncScope: Vector CLI unavailable; refusing LSPosed restart fallback");
+                    return false;
+                }
                 boolean ok = applyViaCli(fw.cli, targetPkgs);
                 Log.i(TAG, "syncScope via cli (Vector): " + ok
                         + ", targets=" + (targetPkgs == null ? 0 : targetPkgs.size()));
@@ -832,6 +836,10 @@ public final class RootScopeManager {
             FrameworkDetector.Info fw = FrameworkDetector.detect();
             if (fw.flavor == FrameworkDetector.FLAVOR_NONE) {
                 Log.e(TAG, "ensureDaemon: framework not detected"); return false;
+            }
+            if (fw.isVector()) {
+                Log.i(TAG, "ensureDaemon: Vector manages its daemon lifecycle; skip root restart");
+                return fw.cliWritesUsable();
             }
             String daemon = fw.moduleDir + "daemon";
             String lspctl = fw.moduleDir + "lspctl";

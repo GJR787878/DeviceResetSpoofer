@@ -9,8 +9,8 @@ import java.util.List;
  * 框架精确检测器：自动识别用户手机里安装的是 <b>官方 LSPosed</b> 还是 <b>JingMatrix/Vector</b>，
  * 读取版本号，并定位可用的 CLI（{@code lspctl} / {@code cli}）。
  *
- * <p>两个分支的目录、进程名、数据库位置完全相同（{@code /data/adb/lspd}、{@code pidof lspd}、
- * {@code modules_config.db}），真正区别只有：</p>
+ * <p>配置库位置相同（{@code /data/adb/lspd/config/modules_config.db}），但守护进程名不同
+ * （官方 {@code lspd}、Vector {@code vectord}）。真正区别还有：</p>
  * <ul>
  *   <li>Magisk 模块 id：{@code zygisk_lsposed}（官方） vs {@code zygisk_vector}（Vector）；</li>
  *   <li>管理器包名：{@code org.lsposed.manager} vs {@code org.matrix.vector.manager}；</li>
@@ -60,7 +60,7 @@ public final class FrameworkDetector {
         public boolean isOfficial() { return flavor == FLAVOR_OFFICIAL; }
 
         /** 该分支的作用域写操作是否可由 App 经 root 无人值守直接完成（Vector 可以，官方不行）。 */
-        public boolean cliWritesUsable() { return flavor == FLAVOR_VECTOR && cli != null; }
+        public boolean cliWritesUsable() { return flavor == FLAVOR_VECTOR && "cli".equals(cliName) && cli != null; }
 
         public String displayName() {
             if (flavor == FLAVOR_NONE) return "未检测到";
@@ -75,7 +75,7 @@ public final class FrameworkDetector {
     public static Info detect() {
         String script =
                 "for id in zygisk_lsposed zygisk_vector; do\n" +
-                "  for base in /data/adb/modules_update /data/adb/modules; do\n" +
+                "  for base in /data/adb/modules /data/adb/modules_update; do\n" +
                 "    d=\"$base/$id\"\n" +
                 "    if [ -f \"$d/module.prop\" ]; then\n" +
                 "      disabled=0\n" +
@@ -121,11 +121,22 @@ public final class FrameworkDetector {
         }
         if (candidates.isEmpty()) return NONE;
 
-        // 优先用管理器包名确定活动分支；否则取第一个活动模块。
+        // Vector 管理器可寄生在模块内，不一定出现在 PackageManager；优先采用活动模块自带的 cli。
         Info picked = null;
         for (Info info : candidates) {
-            if (info.flavor == FLAVOR_VECTOR && hasVectorManager) { picked = info; break; }
-            if (info.flavor == FLAVOR_OFFICIAL && hasOfficialManager) { picked = info; break; }
+            if (info.isVector() && "cli".equals(info.cliName)
+                    && info.moduleDir.startsWith("/data/adb/modules/")
+                    && info.cli != null && info.cli.startsWith(info.moduleDir)) {
+                picked = info;
+                break;
+            }
+        }
+        // 其余情况再用已安装管理器包名判定。
+        if (picked == null) {
+            for (Info info : candidates) {
+                if (info.flavor == FLAVOR_VECTOR && hasVectorManager) { picked = info; break; }
+                if (info.flavor == FLAVOR_OFFICIAL && hasOfficialManager) { picked = info; break; }
+            }
         }
         if (picked == null) picked = candidates.get(0);
 

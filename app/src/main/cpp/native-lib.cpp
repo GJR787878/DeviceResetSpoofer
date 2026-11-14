@@ -17,6 +17,7 @@
 #include <dlfcn.h>
 #include <pthread.h>
 #include <elf.h>
+#include <link.h>
 #include <vector>
 #include <string>
 #include <android/log.h>
@@ -75,25 +76,20 @@ static inline uint32_t rel_sym(uint64_t info) {
 #endif
 }
 
-template <typename Ehdr, typename Phdr, typename Dyn, typename Sym, typename Rela,
-          int GLOB_DAT_TYPE, int JUMP_SLOT_TYPE, bool USE_RELA>
-static void process_elf_at(uintptr_t base, void* hook_addr) {
-    if (base == 0) return;
-    const Ehdr* eh = reinterpret_cast<const Ehdr*>(base);
-    // 校验 ELF magic
-    if (memcmp(eh->e_ident, ELFMAG, SELFMAG) != 0) return;
-
-    const Phdr* ph = reinterpret_cast<const Phdr*>(base + eh->e_phoff);
+template <typename Phdr, typename Dyn, typename Sym, typename Rela,
+          int GLOB_DAT_TYPE, int JUMP_SLOT_TYPE>
+static int process_elf_at(uintptr_t base, const Phdr* ph, size_t phnum, void* hook_addr) {
+    if (ph == nullptr || phnum == 0) return 0;
     const Dyn* dyn = nullptr;
     size_t dyn_count = 0;
-    for (int i = 0; i < eh->e_phnum; i++) {
+    for (size_t i = 0; i < phnum; i++) {
         if (ph[i].p_type == PT_DYNAMIC) {
             dyn = reinterpret_cast<const Dyn*>(base + ph[i].p_vaddr);
             dyn_count = ph[i].p_memsz / sizeof(Dyn);
             break;
         }
     }
-    if (dyn == nullptr) return;
+    if (dyn == nullptr) return 0;
 
     const Sym* symtab = nullptr;
     const char* strtab = nullptr;
@@ -104,6 +100,7 @@ static void process_elf_at(uintptr_t base, void* hook_addr) {
     size_t rela_plt_sz = 0;
 
     for (size_t i = 0; i < dyn_count; i++) {
+        if (dyn[i].d_tag == DT_NULL) break;
         switch (dyn[i].d_tag) {
             case DT_SYMTAB:
                 symtab = reinterpret_cast<const Sym*>(dyn[i].d_un.d_ptr);
@@ -147,8 +144,9 @@ static void process_elf_at(uintptr_t base, void* hook_addr) {
     if (strtab) strtab = reinterpret_cast<const char*>(fix(strtab));
     if (rela_dyn) rela_dyn = reinterpret_cast<const Rela*>(fix(rela_dyn));
     if (rela_plt) rela_plt = reinterpret_cast<const Rela*>(fix(rela_plt));
-    if (!symtab || !strtab) return;
+    if (!symtab || !strtab) return 0;
 
+    int matched = 0;
     auto check_relocs = [&](const Rela* rel, size_t sz) {
         if (!rel) return;
         size_t count = sz / sizeof(Rela);
@@ -160,6 +158,11 @@ static void process_elf_at(uintptr_t base, void* hook_addr) {
             if (strcmp(sname, "__system_property_get") != 0) continue;
             // GOT 条目地址
             uintptr_t got = base + rel[i].r_offset;
+            void** slot = reinterpret_cast<void**>(got);
+            if (*slot == hook_addr) {
+                matched++;
+                continue;
+            }
             uintptr_t page = got & ~(static_cast<uintptr_t>(getpagesize()) - 1);
             if (mprotect(reinterpret_cast<void*>(page), getpagesize(),
                          PROT_READ | PROT_WRITE | PROT_EXEC) != 0) {
@@ -169,67 +172,43 @@ static void process_elf_at(uintptr_t base, void* hook_addr) {
                     continue;
                 }
             }
-            *reinterpret_cast<void**>(got) = hook_addr;
+            *slot = hook_addr;
+            if (*slot == hook_addr) matched++;
         }
     };
     check_relocs(rela_dyn, rela_dyn_sz);
     check_relocs(rela_plt, rela_plt_sz);
+    return matched;
 }
 
 // ===================== 遍历已加载 ELF =====================
 
-static int scan_and_hook(void* hook_addr) {
-    FILE* fp = fopen("/proc/self/maps", "r");
-    if (!fp) return 0;
+struct HookScanContext {
+    void* hook_addr;
+    int matched;
+};
 
-    std::vector<std::pair<uintptr_t, std::string>> bases;
-    char line[1024];
-    std::string last_path;
-    uintptr_t last_base = 0;
-    while (fgets(line, sizeof(line), fp)) {
-        unsigned long start, end, offset;
-        char perms[8];
-        int path_pos = 0;
-        // 格式: start-end perms offset dev inode pathname
-        int n = sscanf(line, "%lx-%lx %7s %lx %*s %*s %n",
-                       &start, &end, perms, &offset, &path_pos);
-        if (n < 4) continue;
-        std::string path;
-        if (path_pos > 0) {
-            size_t len = strlen(line);
-            size_t p = (size_t)path_pos;
-            while (p < len && (line[p] == ' ' || line[p] == '\t')) p++;
-            size_t e = len;
-            while (e > p && (line[e - 1] == '\n' || line[e - 1] == '\r')) e--;
-            path = std::string(line + p, e - p);
-        }
-        // 只取每个 ELF 映射的起始（offset=0 的第一段）
-        if (offset == 0 && !path.empty() && path[0] != '[' &&
-            (path.size() >= 3 && path.compare(path.size() - 3, 3, ".so") == 0
-             || path.find('/') != std::string::npos)) {
-            if (path != last_path) {
-                bases.push_back({(uintptr_t)start, path});
-                last_path = path;
-                last_base = (uintptr_t)start;
-            }
-        }
-    }
-    fclose(fp);
-
-    int hooked = 0;
-    for (const auto& b : bases) {
+static int hook_loaded_elf(struct dl_phdr_info* info, size_t, void* opaque) {
+    if (info == nullptr || info->dlpi_phdr == nullptr || info->dlpi_phnum == 0) return 0;
+    HookScanContext* context = static_cast<HookScanContext*>(opaque);
 #if defined(__aarch64__)
-        process_elf_at<Elf64_Ehdr, Elf64_Phdr, Elf64_Dyn, Elf64_Sym, Elf64_Rela,
-                       R_AARCH64_GLOB_DAT, R_AARCH64_JUMP_SLOT, true>(
-                b.first, hook_addr);
+    context->matched += process_elf_at<Elf64_Phdr, Elf64_Dyn, Elf64_Sym, Elf64_Rela,
+                                      R_AARCH64_GLOB_DAT, R_AARCH64_JUMP_SLOT>(
+            info->dlpi_addr, reinterpret_cast<const Elf64_Phdr*>(info->dlpi_phdr),
+            info->dlpi_phnum, context->hook_addr);
 #elif defined(__arm__)
-        process_elf_at<Elf32_Ehdr, Elf32_Phdr, Elf32_Dyn, Elf32_Sym, Elf32_Rel,
-                       R_ARM_GLOB_DAT, R_ARM_JUMP_SLOT, false>(
-                b.first, hook_addr);
+    context->matched += process_elf_at<Elf32_Phdr, Elf32_Dyn, Elf32_Sym, Elf32_Rel,
+                                      R_ARM_GLOB_DAT, R_ARM_JUMP_SLOT>(
+            info->dlpi_addr, reinterpret_cast<const Elf32_Phdr*>(info->dlpi_phdr),
+            info->dlpi_phnum, context->hook_addr);
 #endif
-        hooked++;
-    }
-    return hooked;
+    return 0;
+}
+
+static int scan_and_hook(void* hook_addr) {
+    HookScanContext context = {hook_addr, 0};
+    dl_iterate_phdr(hook_loaded_elf, &context);
+    return context.matched;
 }
 
 // ===================== JNI =====================
@@ -253,13 +232,13 @@ Java_io_github_gjr787878_devicereset_hooks_NativePropertyHook_nativeInstall(
 }
 
 // 同步伪装属性：names/values 等长数组；同步后重新扫描（覆盖新加载的 so）
-JNIEXPORT void JNICALL
+JNIEXPORT jint JNICALL
 Java_io_github_gjr787878_devicereset_hooks_NativePropertyHook_nativeSync(
         JNIEnv* env, jclass, jobjectArray names, jobjectArray values) {
-    if (names == nullptr || values == nullptr) return;
+    if (names == nullptr || values == nullptr) return 0;
     jsize n = env->GetArrayLength(names);
     jsize m = env->GetArrayLength(values);
-    if (n != m) return;
+    if (n != m) return 0;
 
     pthread_mutex_lock(&g_prop_lock);
     g_props.clear();
@@ -285,7 +264,7 @@ Java_io_github_gjr787878_devicereset_hooks_NativePropertyHook_nativeSync(
         g_orig_get = reinterpret_cast<system_property_get_t>(
                 dlsym(RTLD_DEFAULT, "__system_property_get"));
     }
-    scan_and_hook(reinterpret_cast<void*>(hooked_property_get));
+    return scan_and_hook(reinterpret_cast<void*>(hooked_property_get));
 }
 
 } // extern "C"

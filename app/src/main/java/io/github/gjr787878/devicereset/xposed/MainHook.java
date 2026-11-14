@@ -15,6 +15,7 @@ import io.github.gjr787878.devicereset.hooks.WifiMacHook;
 import io.github.gjr787878.devicereset.hooks.NativePropertyHook;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
+import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XSharedPreferences;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
@@ -173,6 +174,7 @@ public class MainHook implements IXposedHookLoadPackage {
             // ---- Native 系统属性 PLT hook（Java 同步身份）----
             if (hookNativeProp) {
                 NativePropertyHook.syncIdentity(identity);
+                rescanNativePropertiesAfterFirstActivityResume(identity);
                 XposedBridge.log("[DeviceReset] NativeProperty hook installed");
             }
 
@@ -185,6 +187,26 @@ public class MainHook implements IXposedHookLoadPackage {
         } catch (Throwable t) {
             XposedBridge.log("[DeviceReset] FATAL error: " + t.getMessage());
             XposedBridge.log(t);
+        }
+    }
+
+    /** Chrome 等应用的 native 库可能在 handleLoadPackage 执行后才加载。 */
+    private void rescanNativePropertiesAfterFirstActivityResume(Identity identity) {
+        try {
+            Class<?> activityThread = XposedHelpers.findClass("android.app.ActivityThread", null);
+            XposedBridge.hookAllMethods(activityThread, "handleResumeActivity", new XC_MethodHook() {
+                private boolean rescanned;
+
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    if (rescanned) return;
+                    rescanned = true;
+                    NativePropertyHook.syncIdentity(identity);
+                    XposedBridge.log("[DeviceReset] NativeProperty rescan completed after first activity resume");
+                }
+            });
+        } catch (Throwable t) {
+            XposedBridge.log("[DeviceReset] NativeProperty late-load rescan hook failed: " + t.getMessage());
         }
     }
 
