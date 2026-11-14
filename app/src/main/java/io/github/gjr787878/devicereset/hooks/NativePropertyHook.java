@@ -36,7 +36,7 @@ public class NativePropertyHook {
             try {
                 int n = nativeInstall();
                 sInstalled = true;
-                XposedBridge.log("[DeviceReset] native PLT hook installed, scanned=" + n);
+                XposedBridge.log("[DeviceReset] native PLT scan matched __system_property_get relocations=" + n);
             } catch (Throwable t) {
                 XposedBridge.log("[DeviceReset] nativeInstall failed: " + t.getMessage());
             }
@@ -93,8 +93,9 @@ public class NativePropertyHook {
         add(names, values, "ro.boot.btmacaddr", id.bluetoothMac);
 
         try {
-            nativeSync(names.toArray(new String[0]), values.toArray(new String[0]));
-            XposedBridge.log("[DeviceReset] native identity synced, props=" + names.size());
+            int matched = nativeSync(names.toArray(new String[0]), values.toArray(new String[0]));
+            XposedBridge.log("[DeviceReset] native identity synced, props=" + names.size()
+                    + ", matched __system_property_get relocations=" + matched);
         } catch (Throwable t) {
             XposedBridge.log("[DeviceReset] nativeSync failed: " + t.getMessage());
         }
@@ -108,5 +109,5 @@ public class NativePropertyHook {
 
     // ===================== native 方法 =====================
     private static native int nativeInstall();
-    private static native void nativeSync(String[] names, String[] values);
+    private static native int nativeSync(String[] names, String[] values);
 }
